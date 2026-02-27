@@ -41,11 +41,30 @@ Android companion app for the Autotech AI diagnostic gateway. Connects to ELM327
 
 ## Building
 
-Open in Android Studio and build, or:
+### GitHub Actions (CI)
+
+Push a version tag to trigger the build:
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+This builds debug + release APKs and creates a GitHub Release with the artifacts. You can also trigger a build manually from the Actions tab.
+
+**APK signing** (optional): Add these repo secrets for signed release builds:
+- `KEYSTORE_BASE64` — base64-encoded `.jks` keystore
+- `KEYSTORE_PASSWORD`
+- `KEY_ALIAS`
+- `KEY_PASSWORD`
+
+### Local build (without Android Studio)
 
 ```bash
 ./gradlew assembleDebug
 ```
+
+APK output: `app/build/outputs/apk/debug/app-debug.apk`
 
 ## Requirements
 

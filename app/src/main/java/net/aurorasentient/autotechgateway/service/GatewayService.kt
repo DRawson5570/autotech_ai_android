@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import net.aurorasentient.autotechgateway.AutotechApp
 import net.aurorasentient.autotechgateway.R
+import net.aurorasentient.autotechgateway.crash.CrashReporter
 import net.aurorasentient.autotechgateway.elm.*
 import net.aurorasentient.autotechgateway.tunnel.GatewayTunnel
 import net.aurorasentient.autotechgateway.MainActivity
@@ -138,6 +139,7 @@ class GatewayService : Service() {
 
         } catch (e: Exception) {
             Log.e(TAG, "Connect failed: ${e.message}", e)
+            CrashReporter.reportNonFatal(e, mapOf("context" to "bt_connect", "adapter" to adapter.name))
             updateState(GatewayState.ERROR, errorMessage = e.message)
             updateNotification("Connection failed")
             throw e
@@ -176,6 +178,7 @@ class GatewayService : Service() {
             startKeepalive()
 
         } catch (e: Exception) {
+            CrashReporter.reportNonFatal(e, mapOf("context" to "wifi_connect", "host" to host))
             updateState(GatewayState.ERROR, errorMessage = e.message)
             throw e
         }

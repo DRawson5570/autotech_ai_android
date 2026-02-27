@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import net.aurorasentient.autotechgateway.crash.CrashReporter
 
 class AutotechApp : Application() {
 
@@ -15,6 +16,10 @@ class AutotechApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Initialize crash reporter FIRST — catches any crash during setup
+        CrashReporter.init(this)
+
         createNotificationChannel()
     }
 

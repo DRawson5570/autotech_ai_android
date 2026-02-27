@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.AutotechGateway" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#FF121212</item>
+        <item name="android:navigationBarColor">#FF1E1E1E</item>
+        <item name="android:windowBackground">#FF121212</item>
+    </style>
+</resources>

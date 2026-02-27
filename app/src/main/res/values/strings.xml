@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Autotech Gateway</string>
+    <string name="notification_channel_name">Gateway Service</string>
+    <string name="notification_channel_description">Shows when the gateway service is running</string>
+</resources>

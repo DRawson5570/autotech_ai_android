@@ -15,6 +15,9 @@ import net.aurorasentient.autotechgateway.elm.*
 import net.aurorasentient.autotechgateway.service.GatewayService
 import net.aurorasentient.autotechgateway.service.GatewayState
 import net.aurorasentient.autotechgateway.service.GatewayStatus
+import net.aurorasentient.autotechgateway.ui.screens.ScopeState
+import net.aurorasentient.autotechgateway.update.AutoUpdater
+import net.aurorasentient.autotechgateway.update.UpdateInfo
 
 private const val TAG = "GatewayVM"
 
@@ -54,6 +57,20 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage
 
+    // Scope state
+    private val _scopeState = MutableStateFlow(ScopeState())
+    val scopeState: StateFlow<ScopeState> = _scopeState
+    private val scopeSamples = mutableListOf<ScopeSample>()
+    private var sampleCount = 0
+    private var sampleStartTime = 0L
+
+    // Auto-updater
+    private val autoUpdater = AutoUpdater(application)
+    private val _updateInfo = MutableStateFlow<UpdateInfo?>(null)
+    val updateInfo: StateFlow<UpdateInfo?> = _updateInfo
+    private val _updateProgress = MutableStateFlow(-1f)  // -1 = not downloading
+    val updateProgress: StateFlow<Float> = _updateProgress
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val service = (binder as GatewayService.LocalBinder).getService()
@@ -76,6 +93,12 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         bindService()
+
+        // Start periodic update checks
+        autoUpdater.startPeriodicChecks(viewModelScope) { info ->
+            _updateInfo.value = info
+            _toastMessage.value = "Update available: v${info.latestVersion}"
+        }
     }
 
     override fun onCleared() {
@@ -130,6 +153,9 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
 
                 settingsRepo.updateLastAdapter(adapter.address, adapter.type.name)
                 _toastMessage.value = "Connected to ${adapter.name}"
+
+                // Detect STN/OBDLink capabilities
+                detectAdapterCapabilities()
 
                 // Auto-start tunnel if configured
                 if (settings.value.autoTunnel && settings.value.shopId.isNotEmpty()) {
@@ -272,4 +298,120 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
     fun updateAutoTunnel(enabled: Boolean) {
         viewModelScope.launch { settingsRepo.updateAutoTunnel(enabled) }
     }
+
+    // ── Scope ─────────────────────────────────────────────────
+
+    fun selectScopePid(pidName: String) {
+        _scopeState.value = _scopeState.value.copy(selectedPid = pidName)
+    }
+
+    fun startScope() {
+        val pid = _scopeState.value.selectedPid
+        val protocol = gatewayService?.protocol ?: run {
+            _toastMessage.value = "Not connected"
+            return
+        }
+
+        scopeSamples.clear()
+        sampleCount = 0
+        sampleStartTime = System.currentTimeMillis()
+
+        _scopeState.value = _scopeState.value.copy(
+            isRunning = true,
+            samples = emptyList(),
+            currentValue = 0.0,
+            minValue = 0.0,
+            maxValue = 0.0,
+            sampleRate = 0f,
+            capabilities = protocol.capabilities
+        )
+
+        viewModelScope.launch {
+            try {
+                protocol.startScope(pid) { sample ->
+                    scopeSamples.add(sample)
+                    sampleCount++
+
+                    // Keep only last 60 seconds of samples
+                    val cutoff = System.currentTimeMillis() - 60_000
+                    while (scopeSamples.isNotEmpty() && scopeSamples.first().timestampMs < cutoff) {
+                        scopeSamples.removeFirst()
+                    }
+
+                    // Calculate sample rate
+                    val elapsed = (System.currentTimeMillis() - sampleStartTime) / 1000f
+                    val rate = if (elapsed > 0) sampleCount / elapsed else 0f
+
+                    _scopeState.value = _scopeState.value.copy(
+                        samples = scopeSamples.toList(),
+                        currentValue = sample.value,
+                        minValue = scopeSamples.minOf { it.value },
+                        maxValue = scopeSamples.maxOf { it.value },
+                        sampleRate = rate
+                    )
+                }
+            } catch (e: Exception) {
+                _toastMessage.value = "Scope error: ${e.message}"
+            } finally {
+                _scopeState.value = _scopeState.value.copy(isRunning = false)
+            }
+        }
+    }
+
+    fun stopScope() {
+        gatewayService?.protocol?.stopScope()
+    }
+
+    /**
+     * Detect adapter capabilities (STN/OBDLink) after connecting.
+     */
+    fun detectAdapterCapabilities() {
+        viewModelScope.launch {
+            try {
+                val caps = gatewayService?.protocol?.detectAdapter()
+                if (caps != null) {
+                    _scopeState.value = _scopeState.value.copy(capabilities = caps)
+                    if (caps.isSTN) {
+                        _toastMessage.value = "${caps.deviceName} detected — high-speed mode enabled"
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Adapter detection failed: ${e.message}")
+            }
+        }
+    }
+
+    // ── Auto-Update ───────────────────────────────────────────
+
+    fun checkForUpdate() {
+        viewModelScope.launch {
+            val info = autoUpdater.checkForUpdate()
+            _updateInfo.value = info
+            if (!info.available) {
+                _toastMessage.value = "You're on the latest version (${info.currentVersion})"
+            }
+        }
+    }
+
+    fun installUpdate() {
+        val info = _updateInfo.value ?: return
+        if (info.downloadUrl.isEmpty()) return
+
+        viewModelScope.launch {
+            _updateProgress.value = 0f
+            val success = autoUpdater.downloadAndInstall(info.downloadUrl) { progress ->
+                _updateProgress.value = progress
+            }
+            if (!success) {
+                _toastMessage.value = "Update download failed"
+            }
+            _updateProgress.value = -1f
+        }
+    }
+
+    fun dismissUpdate() {
+        _updateInfo.value = null
+    }
+
+    fun getAppVersion(): String = autoUpdater.getCurrentVersion()
 }

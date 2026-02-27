@@ -13,8 +13,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import net.aurorasentient.autotechgateway.ui.AppSettings
 import net.aurorasentient.autotechgateway.ui.theme.*
+import net.aurorasentient.autotechgateway.update.UpdateInfo
 
 /**
  * Settings screen — shop config, connection preferences, about.
@@ -29,6 +31,10 @@ fun SettingsScreen(
     onUpdateWifiPort: (Int) -> Unit,
     onUpdateAutoConnect: (Boolean) -> Unit,
     onUpdateAutoTunnel: (Boolean) -> Unit,
+    onCheckForUpdate: () -> Unit,
+    onInstallUpdate: () -> Unit,
+    updateInfo: UpdateInfo?,
+    updateProgress: Float,
     appVersion: String
 ) {
     var editingShopId by remember(settings.shopId) { mutableStateOf(settings.shopId) }
@@ -132,6 +138,58 @@ fun SettingsScreen(
             InfoRow2("App Version", appVersion)
             InfoRow2("Platform", "Android")
             InfoRow2("Protocol", "ELM327 / OBD-II / UDS")
+        }
+
+        // Updates
+        SectionCard("Updates", Icons.Default.SystemUpdate) {
+            if (updateInfo?.available == true) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = StatusGreen.copy(alpha = 0.12f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            "Update available: v${updateInfo.latestVersion}",
+                            color = StatusGreen,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (updateInfo.releaseNotes.isNotEmpty()) {
+                            Text(updateInfo.releaseNotes, color = TextSecondary, fontSize = 12.sp)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        if (updateProgress in 0f..1f) {
+                            LinearProgressIndicator(
+                                progress = { updateProgress },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = AutotechBlue
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("Downloading... ${(updateProgress * 100).toInt()}%",
+                                color = TextSecondary, fontSize = 12.sp)
+                        } else {
+                            Button(
+                                onClick = onInstallUpdate,
+                                colors = ButtonDefaults.buttonColors(containerColor = StatusGreen)
+                            ) {
+                                Icon(Icons.Default.Download, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Download & Install")
+                            }
+                        }
+                    }
+                }
+            } else {
+                Button(
+                    onClick = onCheckForUpdate,
+                    colors = ButtonDefaults.buttonColors(containerColor = AutotechBlue),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Check for Updates")
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(32.dp))

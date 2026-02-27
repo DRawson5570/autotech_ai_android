@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
 enum class Screen(val label: String, val icon: ImageVector) {
     DASHBOARD("Dashboard", Icons.Default.Dashboard),
     DIAGNOSTICS("Diagnostics", Icons.Default.BugReport),
+    SCOPE("Scope", Icons.Default.ShowChart),
     MODULES("Modules", Icons.Default.Memory),
     SETTINGS("Settings", Icons.Default.Settings)
 }
@@ -103,6 +104,9 @@ fun MainApp(viewModel: GatewayViewModel) {
     val modules by viewModel.modules.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
     val toastMessage by viewModel.toastMessage.collectAsState()
+    val scopeState by viewModel.scopeState.collectAsState()
+    val updateInfo by viewModel.updateInfo.collectAsState()
+    val updateProgress by viewModel.updateProgress.collectAsState()
 
     // Show toasts
     LaunchedEffect(toastMessage) {
@@ -193,6 +197,12 @@ fun MainApp(viewModel: GatewayViewModel) {
                     onReadLivePids = { viewModel.readLivePids() },
                     onRefreshPids = { viewModel.refreshLivePids() }
                 )
+                Screen.SCOPE -> ScopeScreen(
+                    scopeState = scopeState,
+                    onSelectPid = { viewModel.selectScopePid(it) },
+                    onStartScope = { viewModel.startScope() },
+                    onStopScope = { viewModel.stopScope() }
+                )
                 Screen.MODULES -> ModulesScreen(
                     modules = modules.map {
                         ModuleItem(
@@ -214,7 +224,11 @@ fun MainApp(viewModel: GatewayViewModel) {
                     onUpdateWifiPort = { viewModel.updateWifiPort(it) },
                     onUpdateAutoConnect = { viewModel.updateAutoConnect(it) },
                     onUpdateAutoTunnel = { viewModel.updateAutoTunnel(it) },
-                    appVersion = "1.0.0"
+                    onCheckForUpdate = { viewModel.checkForUpdate() },
+                    onInstallUpdate = { viewModel.installUpdate() },
+                    updateInfo = updateInfo,
+                    updateProgress = updateProgress,
+                    appVersion = viewModel.getAppVersion()
                 )
             }
         }

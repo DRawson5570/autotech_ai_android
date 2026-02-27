@@ -27,6 +27,8 @@ import net.aurorasentient.autotechgateway.elm.AdapterCapabilities
 import net.aurorasentient.autotechgateway.elm.ScopeSample
 import net.aurorasentient.autotechgateway.ui.theme.*
 
+@OptIn(ExperimentalMaterial3Api::class)
+
 /**
  * Scope data model for the UI.
  */
@@ -72,7 +74,7 @@ fun ScopeScreen(
     onStartScope: () -> Unit,
     onStopScope: () -> Unit
 ) {
-    var timeWindowMs by remember { mutableLongStateOf(10_000L) }
+    var timeWindowMs by remember { mutableStateOf(10_000L) }
 
     Column(
         modifier = Modifier
@@ -178,6 +180,7 @@ fun ScopeScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         // ── Time Window Selector ────────────────────────────────
+        @OptIn(ExperimentalMaterial3Api::class)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp)

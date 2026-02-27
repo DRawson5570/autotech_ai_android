@@ -409,7 +409,7 @@ class OBDProtocol(private val connection: ElmConnection) {
         }
 
         isScopeRunning = true
-        val minIntervalMs = if (targetHz > 0) (1000 / targetHz) else 0L
+        val minIntervalMs = if (targetHz > 0) (1000L / targetHz) else 0L
 
         Log.i(TAG, "Scope started: ${def.name} (${def.description})")
 

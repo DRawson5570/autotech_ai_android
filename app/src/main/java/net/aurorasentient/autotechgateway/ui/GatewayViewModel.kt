@@ -328,7 +328,7 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             try {
-                protocol.startScope(pid) { sample ->
+                protocol.startScope(pid, onSample = { sample ->
                     scopeSamples.add(sample)
                     sampleCount++
 
@@ -349,7 +349,7 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
                         maxValue = scopeSamples.maxOf { it.value },
                         sampleRate = rate
                     )
-                }
+                }) // end startScope
             } catch (e: Exception) {
                 _toastMessage.value = "Scope error: ${e.message}"
             } finally {

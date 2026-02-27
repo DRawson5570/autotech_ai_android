@@ -160,7 +160,7 @@ fun SettingsScreen(
 
                         if (updateProgress in 0f..1f) {
                             LinearProgressIndicator(
-                                progress = { updateProgress },
+                                progress = updateProgress,
                                 modifier = Modifier.fillMaxWidth(),
                                 color = AutotechBlue
                             )

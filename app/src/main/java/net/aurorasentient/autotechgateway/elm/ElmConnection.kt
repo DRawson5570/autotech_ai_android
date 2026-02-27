@@ -13,6 +13,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothSocket
@@ -205,7 +206,8 @@ class BluetoothClassicConnection(
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
 
-    override suspend fun connect() = withContext(Dispatchers.IO) {
+    override suspend fun connect() {
+        withContext(Dispatchers.IO) {
         Log.i(TAG, "Connecting to BT Classic: ${device.name} (${device.address})")
 
         socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
@@ -233,8 +235,10 @@ class BluetoothClassicConnection(
 
         Log.i(TAG, "BT Classic connected to ${device.name}")
     }
+    }
 
-    override suspend fun disconnect() = withContext(Dispatchers.IO) {
+    override suspend fun disconnect() {
+        withContext(Dispatchers.IO) {
         isConnected = false
         try { inputStream?.close() } catch (_: Exception) {}
         try { outputStream?.close() } catch (_: Exception) {}
@@ -243,6 +247,7 @@ class BluetoothClassicConnection(
         outputStream = null
         socket = null
         Log.i(TAG, "BT Classic disconnected")
+    }
     }
 
     override suspend fun sendCommandInternal(command: String, timeoutMs: Long): String =
@@ -383,7 +388,7 @@ class BleConnection(
                         UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
                     )
                     if (desc != null) {
-                        desc.value = BluetoothGattCharacteristic.ENABLE_NOTIFICATION_VALUE
+                        desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                         g.writeDescriptor(desc)
                     }
                 }
@@ -472,7 +477,8 @@ class WiFiConnection(
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
 
-    override suspend fun connect() = withContext(Dispatchers.IO) {
+    override suspend fun connect() {
+        withContext(Dispatchers.IO) {
         val host = config.address.ifEmpty { WIFI_DEFAULT_HOST }
         val port = config.port
 
@@ -489,8 +495,10 @@ class WiFiConnection(
         initializeAdapter()
         Log.i(TAG, "WiFi connected to $host:$port")
     }
+    }
 
-    override suspend fun disconnect() = withContext(Dispatchers.IO) {
+    override suspend fun disconnect() {
+        withContext(Dispatchers.IO) {
         isConnected = false
         try { inputStream?.close() } catch (_: Exception) {}
         try { outputStream?.close() } catch (_: Exception) {}
@@ -499,6 +507,7 @@ class WiFiConnection(
         outputStream = null
         socket = null
         Log.i(TAG, "WiFi disconnected")
+    }
     }
 
     override suspend fun sendCommandInternal(command: String, timeoutMs: Long): String =

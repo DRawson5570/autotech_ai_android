@@ -117,7 +117,7 @@ fun SettingsScreen(
                 onCheckedChange = onUpdateAutoConnect
             )
 
-            HorizontalDivider(color = DarkSurface, modifier = Modifier.padding(vertical = 4.dp))
+            Divider(color = DarkSurface, modifier = Modifier.padding(vertical = 4.dp))
 
             SettingsToggle(
                 label = "Auto-tunnel",

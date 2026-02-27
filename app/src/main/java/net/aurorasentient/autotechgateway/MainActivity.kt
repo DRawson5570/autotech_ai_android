@@ -182,7 +182,7 @@ fun MainApp(viewModel: GatewayViewModel) {
                 )
                 Screen.DIAGNOSTICS -> DiagnosticsScreen(
                     livePids = livePids.mapValues { (name, value) ->
-                        val pid = net.aurorasentient.autotechgateway.elm.PIDRegistry.findByName(name)
+                        val pid = net.aurorasentient.autotechgateway.elm.PIDRegistry.getByName(name)
                         if (pid != null) "%.1f %s".format(value, pid.unit)
                         else "%.1f".format(value)
                     },

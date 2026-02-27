@@ -22,11 +22,18 @@ val StatusOrange = Color(0xFFFF9800)
 val DtcStored = Color(0xFFF44336)
 val DtcPending = Color(0xFFFF9800)
 val DtcPermanent = Color(0xFF9C27B0)
+val DTCStored = DtcStored
+val DTCPending = DtcPending
+val DTCPermanent = DtcPermanent
 
 // Gauge colors
 val GaugeNormal = Color(0xFF4CAF50)
 val GaugeWarning = Color(0xFFFF9800)
 val GaugeDanger = Color(0xFFF44336)
+val GaugeBlue = Color(0xFF2196F3)
+val GaugeGreen = GaugeNormal
+val GaugeOrange = GaugeWarning
+val GaugeRed = GaugeDanger
 
 // Text
 val TextPrimary = Color(0xFFE0E0E0)

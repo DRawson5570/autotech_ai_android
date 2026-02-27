@@ -24,7 +24,7 @@ import net.aurorasentient.autotechgateway.AutotechApp
 import net.aurorasentient.autotechgateway.R
 import net.aurorasentient.autotechgateway.elm.*
 import net.aurorasentient.autotechgateway.tunnel.GatewayTunnel
-import net.aurorasentient.autotechgateway.ui.MainActivity
+import net.aurorasentient.autotechgateway.MainActivity
 
 private const val TAG = "GatewayService"
 private const val NOTIFICATION_ID = 1

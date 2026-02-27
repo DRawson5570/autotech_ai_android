@@ -65,10 +65,6 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { it[SettingsKeys.SERVER_URL] = url }
     }
 
-    suspend fun updateServerUrl(url: String) {
-        context.dataStore.edit { it[SettingsKeys.SERVER_URL] = url }
-    }
-
     suspend fun updateLastAdapter(address: String, type: String) {
         context.dataStore.edit {
             it[SettingsKeys.LAST_ADAPTER_ADDRESS] = address

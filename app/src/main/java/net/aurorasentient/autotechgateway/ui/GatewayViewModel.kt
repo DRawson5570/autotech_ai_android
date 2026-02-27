@@ -232,7 +232,7 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
                 _modules.value = mods
                 _toastMessage.value = "Found ${mods.size} module(s)"
             } catch (e: Exception) {
-                _toastMessage.value = "Scan failed: ${e.message}")
+                _toastMessage.value = "Scan failed: ${e.message}"
             } finally {
                 _isScanning.value = false
             }

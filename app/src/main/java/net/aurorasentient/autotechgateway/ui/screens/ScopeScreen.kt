@@ -27,8 +27,6 @@ import net.aurorasentient.autotechgateway.elm.AdapterCapabilities
 import net.aurorasentient.autotechgateway.elm.ScopeSample
 import net.aurorasentient.autotechgateway.ui.theme.*
 
-@OptIn(ExperimentalMaterial3Api::class)
-
 /**
  * Scope data model for the UI.
  */
@@ -67,6 +65,7 @@ val TIME_WINDOWS = listOf(
     60_000L to "1m",
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScopeScreen(
     scopeState: ScopeState,

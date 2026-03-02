@@ -43,6 +43,11 @@ class GatewayTunnel(
     private var running = false
     private var scope: CoroutineScope? = null
 
+    // Sniffer session state
+    private var snifferSession: CanSnifferSession? = null
+    private var snifferJob: Job? = null
+    private var broadcastDecoder: LiveBroadcastDecoder? = null
+
     @Volatile
     var isRegistered = false
         private set
@@ -347,6 +352,229 @@ class GatewayTunnel(
                     connection.sendCommand("ATSP0")
                     val result = JsonObject().apply { addProperty("reset", true) }
                     TunnelResponse(200, result)
+                }
+
+                // ── Sniffer (passive CAN bus capture) ──
+
+                path == "/sniff/start" -> {
+                    if (snifferSession?.running == true) {
+                        TunnelResponse(409, errorJson("Sniffer already running"))
+                    } else if (!protocol.capabilities.supportsSTMA) {
+                        TunnelResponse(400, errorJson("Adapter does not support STMA"))
+                    } else {
+                        val bus = body?.get("bus")?.asString ?: "HS-CAN"
+                        val vin = body?.get("vin")?.asString ?: ""
+                        val make = body?.get("make")?.asString ?: ""
+
+                        // Load DBC database for broadcast decoding
+                        val context = AutotechApp.instance
+                        var dbcDb: DBCDatabase? = null
+                        var dbcSource = ""
+                        if (vin.isNotEmpty()) {
+                            dbcDb = loadDbcForVin(context, vin)
+                            dbcSource = "VIN $vin"
+                        } else if (make.isNotEmpty()) {
+                            dbcDb = loadDbcForOem(context, make)
+                            dbcSource = "make $make"
+                        }
+
+                        broadcastDecoder = if (dbcDb != null && dbcDb.totalMessages > 0) {
+                            Log.i(TAG, "DBC decoder loaded from $dbcSource: ${dbcDb.totalMessages} msgs")
+                            LiveBroadcastDecoder(dbcDb)
+                        } else {
+                            Log.i(TAG, "No DBC files loaded — broadcast frames not decoded")
+                            null
+                        }
+
+                        snifferSession = CanSnifferSession(bus).apply { setRunning(true) }
+
+                        // Launch sniffer coroutine
+                        snifferJob = scope?.launch(Dispatchers.IO) {
+                            try {
+                                protocol.startCanMonitor { timestamp, arbIdStr, dataStr ->
+                                    val frame = parseStmaLine("$arbIdStr $dataStr")
+                                    if (frame != null) {
+                                        snifferSession?.addFrame(frame)
+                                        // Auto-decode broadcast frames via DBC
+                                        broadcastDecoder?.decodeFrame(
+                                            frame.arbId, frame.data, frame.timestamp
+                                        )
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Sniffer error: ${e.message}")
+                            } finally {
+                                snifferSession?.setRunning(false)
+                            }
+                        }
+
+                        val result = JsonObject().apply {
+                            addProperty("status", "started")
+                            addProperty("bus", bus)
+                            addProperty("dbc_loaded", broadcastDecoder != null)
+                            broadcastDecoder?.getStats()?.let { add("dbc_info", it) }
+                            addProperty("message", "Sniffer running. Adapter is in passive listen mode." +
+                                if (broadcastDecoder != null) " DBC decoder active ($dbcSource)." else "")
+                        }
+                        TunnelResponse(200, result)
+                    }
+                }
+
+                path == "/sniff/stop" -> {
+                    val session = snifferSession
+                    if (session == null) {
+                        TunnelResponse(400, errorJson("No active sniffer session"))
+                    } else {
+                        // Stop the monitor
+                        protocol.stopCanMonitor()
+                        snifferJob?.join()
+                        snifferJob = null
+
+                        // Extract exchanges
+                        session.extractExchanges()
+                        val didData = session.getDidData()
+                        val summary = session.toSummary()
+                        val labels = session.getLabels()
+
+                        val result = JsonObject().apply {
+                            addProperty("status", "stopped")
+                            addProperty("frame_count", summary["frame_count"] as Int)
+                            addProperty("exchange_count", summary["exchange_count"] as Int)
+                            addProperty("unique_modules", summary["unique_modules"] as Int)
+                            addProperty("bus", session.bus)
+
+                            // DID data grouped by module
+                            val didObj = JsonObject()
+                            for ((module, dids) in didData) {
+                                val moduleObj = JsonObject()
+                                for ((did, data) in dids) {
+                                    val didInfo = JsonObject().apply {
+                                        addProperty("data", data)
+                                    }
+                                    moduleObj.add(did, didInfo)
+                                }
+                                didObj.add(module, moduleObj)
+                            }
+                            add("did_data", didObj)
+
+                            // Labels
+                            val labelsObj = JsonObject()
+                            for ((key, label) in labels) {
+                                labelsObj.addProperty(key, label)
+                            }
+                            add("labels", labelsObj)
+
+                            // Include final DBC-decoded broadcast snapshot
+                            broadcastDecoder?.let { decoder ->
+                                val broadcast = JsonObject().apply {
+                                    add("key_signals", decoder.getKeySignals())
+                                    add("all_signals", decoder.getSnapshot())
+                                    add("stats", decoder.getStats())
+                                }
+                                add("broadcast", broadcast)
+                            }
+                        }
+
+                        snifferSession = null
+                        TunnelResponse(200, result)
+                    }
+                }
+
+                path == "/sniff/frames" -> {
+                    val session = snifferSession
+                    if (session == null) {
+                        TunnelResponse(400, errorJson("No active sniffer session"))
+                    } else {
+                        session.extractExchanges()
+                        val didData = session.getDidData()
+                        val summary = session.toSummary()
+                        val labels = session.getLabels()
+
+                        val result = JsonObject().apply {
+                            addProperty("running", session.running)
+                            addProperty("frame_count", summary["frame_count"] as Int)
+                            addProperty("exchange_count", summary["exchange_count"] as Int)
+                            addProperty("unique_modules", summary["unique_modules"] as Int)
+                            addProperty("bus", session.bus)
+
+                            val didObj = JsonObject()
+                            for ((module, dids) in didData) {
+                                val moduleObj = JsonObject()
+                                for ((did, data) in dids) {
+                                    val didInfo = JsonObject().apply {
+                                        addProperty("data", data)
+                                    }
+                                    moduleObj.add(did, didInfo)
+                                }
+                                didObj.add(module, moduleObj)
+                            }
+                            add("did_data", didObj)
+
+                            val labelsObj = JsonObject()
+                            for ((key, label) in labels) {
+                                labelsObj.addProperty(key, label)
+                            }
+                            add("labels", labelsObj)
+
+                            // Include DBC-decoded broadcast data if decoder is active
+                            broadcastDecoder?.let { decoder ->
+                                val broadcast = JsonObject().apply {
+                                    add("key_signals", decoder.getKeySignals())
+                                    add("stats", decoder.getStats())
+                                }
+                                add("broadcast", broadcast)
+                            }
+                        }
+                        TunnelResponse(200, result)
+                    }
+                }
+
+                path == "/sniff/live" -> {
+                    val session = snifferSession
+                    val decoder = broadcastDecoder
+                    if (session == null) {
+                        TunnelResponse(400, errorJson("No active sniffer session"))
+                    } else if (decoder == null) {
+                        TunnelResponse(400, errorJson("No DBC decoder loaded. Start sniffer with VIN or make."))
+                    } else {
+                        val result = JsonObject().apply {
+                            addProperty("running", session.running)
+                            add("key_signals", decoder.getKeySignals())
+                            add("all_signals", decoder.getSnapshot())
+                            add("stats", decoder.getStats())
+                        }
+                        TunnelResponse(200, result)
+                    }
+                }
+
+                path == "/sniff/label" -> {
+                    val session = snifferSession
+                    if (session == null) {
+                        TunnelResponse(400, errorJson("No active sniffer session"))
+                    } else {
+                        val module = body?.get("module")?.asString
+                            ?: return@try TunnelResponse(400, errorJson("Missing module"))
+                        val did = body.get("did")?.asString
+                            ?: return@try TunnelResponse(400, errorJson("Missing did"))
+                        val label = body.get("label")?.asString
+                            ?: return@try TunnelResponse(400, errorJson("Missing label"))
+
+                        val normModule = module.trim().uppercase().let {
+                            if (it.startsWith("0X")) "0x${it.removePrefix("0X")}" else "0x$it"
+                        }
+                        val normDid = did.trim().uppercase()
+
+                        session.addLabel(normModule, normDid, label.trim())
+
+                        val result = JsonObject().apply {
+                            addProperty("status", "labeled")
+                            addProperty("module", normModule)
+                            addProperty("did", normDid)
+                            addProperty("label", label)
+                            addProperty("total_labels", session.getLabels().size)
+                        }
+                        TunnelResponse(200, result)
+                    }
                 }
 
                 else -> {

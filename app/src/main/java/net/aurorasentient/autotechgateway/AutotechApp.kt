@@ -12,10 +12,14 @@ class AutotechApp : Application() {
         const val CHANNEL_ID = "autotech_gateway_service"
         const val CHANNEL_NAME = "Gateway Service"
         const val VERSION = "1.0.0"
+
+        lateinit var instance: AutotechApp
+            private set
     }
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
 
         // Initialize crash reporter FIRST — catches any crash during setup
         CrashReporter.init(this)

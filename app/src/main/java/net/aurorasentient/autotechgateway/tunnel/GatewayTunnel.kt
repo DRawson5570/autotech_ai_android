@@ -438,9 +438,9 @@ class GatewayTunnel(
 
                         val result = JsonObject().apply {
                             addProperty("status", "stopped")
-                            addProperty("frame_count", summary["frame_count"] as Int)
-                            addProperty("exchange_count", summary["exchange_count"] as Int)
-                            addProperty("unique_modules", summary["unique_modules"] as Int)
+                            addProperty("frame_count", summary["frame_count"] as Number)
+                            addProperty("exchange_count", summary["exchange_count"] as Number)
+                            addProperty("unique_modules", summary["unique_modules"] as Number)
                             addProperty("bus", session.bus)
 
                             // DID data grouped by module
@@ -492,9 +492,9 @@ class GatewayTunnel(
 
                         val result = JsonObject().apply {
                             addProperty("running", session.running)
-                            addProperty("frame_count", summary["frame_count"] as Int)
-                            addProperty("exchange_count", summary["exchange_count"] as Int)
-                            addProperty("unique_modules", summary["unique_modules"] as Int)
+                            addProperty("frame_count", summary["frame_count"] as Number)
+                            addProperty("exchange_count", summary["exchange_count"] as Number)
+                            addProperty("unique_modules", summary["unique_modules"] as Number)
                             addProperty("bus", session.bus)
 
                             val didObj = JsonObject()
@@ -552,28 +552,33 @@ class GatewayTunnel(
                     if (session == null) {
                         TunnelResponse(400, errorJson("No active sniffer session"))
                     } else {
-                        val module = body?.get("module")?.asString
-                            ?: return@try TunnelResponse(400, errorJson("Missing module"))
-                        val did = body.get("did")?.asString
-                            ?: return@try TunnelResponse(400, errorJson("Missing did"))
-                        val label = body.get("label")?.asString
-                            ?: return@try TunnelResponse(400, errorJson("Missing label"))
+                        val moduleStr = body?.get("module")?.asString
+                        val didStr = body?.get("did")?.asString
+                        val labelStr = body?.get("label")?.asString
 
-                        val normModule = module.trim().uppercase().let {
-                            if (it.startsWith("0X")) "0x${it.removePrefix("0X")}" else "0x$it"
+                        if (moduleStr == null) {
+                            TunnelResponse(400, errorJson("Missing module"))
+                        } else if (didStr == null) {
+                            TunnelResponse(400, errorJson("Missing did"))
+                        } else if (labelStr == null) {
+                            TunnelResponse(400, errorJson("Missing label"))
+                        } else {
+                            val normModule = moduleStr.trim().uppercase().let { m ->
+                                if (m.startsWith("0X")) "0x${m.removePrefix("0X")}" else "0x$m"
+                            }
+                            val normDid = didStr.trim().uppercase()
+
+                            session.addLabel(normModule, normDid, labelStr.trim())
+
+                            val result = JsonObject().apply {
+                                addProperty("status", "labeled")
+                                addProperty("module", normModule)
+                                addProperty("did", normDid)
+                                addProperty("label", labelStr)
+                                addProperty("total_labels", session.getLabels().size as Number)
+                            }
+                            TunnelResponse(200, result)
                         }
-                        val normDid = did.trim().uppercase()
-
-                        session.addLabel(normModule, normDid, label.trim())
-
-                        val result = JsonObject().apply {
-                            addProperty("status", "labeled")
-                            addProperty("module", normModule)
-                            addProperty("did", normDid)
-                            addProperty("label", label)
-                            addProperty("total_labels", session.getLabels().size)
-                        }
-                        TunnelResponse(200, result)
                     }
                 }
 

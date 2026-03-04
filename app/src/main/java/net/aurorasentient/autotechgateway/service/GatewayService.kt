@@ -213,6 +213,16 @@ class GatewayService : Service() {
         updateState(GatewayState.TUNNEL_CONNECTING)
 
         tunnel = GatewayTunnel(shopId, apiKey, proto, conn).apply {
+            // Wire up restart callback — disconnect and restart the service
+            onRestartRequested = {
+                serviceScope.launch {
+                    Log.w(TAG, "🔄 Remote restart — disconnecting and restarting service...")
+                    disconnect()
+                    // Stop self — Android will relaunch via START_STICKY
+                    stopSelf()
+                }
+            }
+
             statusListener = object : GatewayTunnel.StatusListener {
                 override fun onTunnelConnected() {
                     Log.i(TAG, "Tunnel connected")

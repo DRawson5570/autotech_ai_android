@@ -11,7 +11,7 @@ class AutotechApp : Application() {
     companion object {
         const val CHANNEL_ID = "autotech_gateway_service"
         const val CHANNEL_NAME = "Gateway Service"
-        const val VERSION = "1.0.0"
+        const val VERSION = "1.0.7"
 
         lateinit var instance: AutotechApp
             private set

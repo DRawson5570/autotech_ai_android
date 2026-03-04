@@ -16,6 +16,7 @@ import kotlinx.coroutines.*
 import net.aurorasentient.autotechgateway.AutotechApp
 import net.aurorasentient.autotechgateway.elm.*
 import okhttp3.*
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "GatewayTunnel"
@@ -24,6 +25,7 @@ private const val TUNNEL_URL = "wss://automotive.aurora-sentient.net/api/scan_to
 private const val INITIAL_BACKOFF_MS = 5000L
 private const val MAX_BACKOFF_MS = 60000L
 private const val BACKOFF_FACTOR = 1.5
+private const val MAX_CONCURRENT = 4
 
 class GatewayTunnel(
     private val shopId: String,
@@ -43,6 +45,10 @@ class GatewayTunnel(
     private var running = false
     private var scope: CoroutineScope? = null
 
+    // Request lifecycle management (mirrors reverse_tunnel.py v1.2.47+)
+    private val activeTasks = ConcurrentHashMap<String, Job>()
+    private val cancelledIds = ConcurrentHashMap.newKeySet<String>()
+
     // Sniffer session state
     private var snifferSession: CanSnifferSession? = null
     private var snifferJob: Job? = null
@@ -51,6 +57,9 @@ class GatewayTunnel(
     @Volatile
     var isRegistered = false
         private set
+
+    /** Callback invoked when a remote /restart request is received. */
+    var onRestartRequested: (() -> Unit)? = null
 
     interface StatusListener {
         fun onTunnelConnected()
@@ -162,22 +171,111 @@ class GatewayTunnel(
                     val method = msg.get("method")?.asString ?: "GET"
                     val path = msg.get("path")?.asString ?: "/"
                     val body = msg.get("body")?.asJsonObject
+                    val deadline = msg.get("deadline")?.asDouble ?: 0.0
 
-                    Log.d(TAG, "Request: $method $path")
+                    Log.d(TAG, "← Request $id: $method $path")
 
-                    val response = handleRequest(method, path, body)
-
-                    val resp = JsonObject().apply {
-                        addProperty("type", "response")
-                        addProperty("id", id)
-                        addProperty("status", response.status)
-                        add("body", response.body)
+                    // Check if already expired before starting
+                    if (deadline > 0 && System.currentTimeMillis() / 1000.0 > deadline) {
+                        Log.i(TAG, "⏭ Dropping expired request $id: $method $path")
+                        val resp = JsonObject().apply {
+                            addProperty("type", "response")
+                            addProperty("id", id)
+                            addProperty("status", 408)
+                            add("body", errorJson("Request expired before delivery"))
+                        }
+                        ws.send(resp.toString())
+                        return
                     }
-                    ws.send(resp.toString())
+
+                    // Check concurrent request limit
+                    if (activeTasks.size >= MAX_CONCURRENT) {
+                        Log.w(TAG, "⚠ Rejecting request $id: ${activeTasks.size} already in flight")
+                        val resp = JsonObject().apply {
+                            addProperty("type", "response")
+                            addProperty("id", id)
+                            addProperty("status", 429)
+                            add("body", errorJson("Gateway busy: ${activeTasks.size} requests in flight"))
+                        }
+                        ws.send(resp.toString())
+                        return
+                    }
+
+                    // Run in background and track
+                    val job = scope?.launch(Dispatchers.IO) {
+                        handleRequestBackground(ws, id, method, path, body, deadline)
+                    }
+                    if (job != null) {
+                        activeTasks[id] = job
+                        job.invokeOnCompletion { activeTasks.remove(id) }
+                    }
+                }
+
+                "cancel" -> {
+                    // Proxy timed out — cancel the in-flight request
+                    val id = msg.get("id")?.asString ?: return
+                    Log.i(TAG, "✋ Cancel received for $id")
+                    cancelledIds.add(id)
+                    val task = activeTasks[id]
+                    if (task != null && task.isActive) {
+                        task.cancel()
+                        Log.i(TAG, "Cancelled active task $id")
+                    }
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling message: ${e.message}")
+        }
+    }
+
+    /**
+     * Handle a request in a background task with deadline/cancel awareness.
+     * Mirrors reverse_tunnel.py _handle_request_background().
+     */
+    private suspend fun handleRequestBackground(
+        ws: WebSocket, id: String, method: String, path: String, body: JsonObject?, deadline: Double
+    ) {
+        try {
+            // Check if already cancelled
+            if (id in cancelledIds) {
+                cancelledIds.remove(id)
+                Log.i(TAG, "⏭ Skipping cancelled request $id: $method $path")
+                return
+            }
+
+            // Check if deadline already passed
+            if (deadline > 0 && System.currentTimeMillis() / 1000.0 > deadline) {
+                Log.i(TAG, "⏭ Skipping expired request $id: $method $path")
+                val resp = JsonObject().apply {
+                    addProperty("type", "response")
+                    addProperty("id", id)
+                    addProperty("status", 408)
+                    add("body", errorJson("Request expired before processing"))
+                }
+                ws.send(resp.toString())
+                return
+            }
+
+            val response = handleRequest(method, path, body)
+
+            // If cancelled during execution, still send the response (it's done) but log it
+            if (id in cancelledIds) {
+                cancelledIds.remove(id)
+                Log.i(TAG, "Request $id completed but was cancelled during execution")
+            }
+
+            val resp = JsonObject().apply {
+                addProperty("type", "response")
+                addProperty("id", id)
+                addProperty("status", response.status)
+                add("body", response.body)
+            }
+            ws.send(resp.toString())
+            Log.d(TAG, "→ Response $id: ${response.status}")
+        } catch (e: CancellationException) {
+            Log.i(TAG, "✋ Request $id cancelled: $method $path")
+        } catch (e: Exception) {
+            Log.e(TAG, "Request $id failed: ${e.message}")
         }
     }
 
@@ -352,6 +450,42 @@ class GatewayTunnel(
                     connection.sendCommand("ATSP0")
                     val result = JsonObject().apply { addProperty("reset", true) }
                     TunnelResponse(200, result)
+                }
+
+                path == "/reconnect-adapter" -> {
+                    // Force-close and reopen the connection (mirrors server.py v1.2.48+).
+                    // Unlike /reset-adapter which sends ATZ through the existing
+                    // connection (and can hang if the transport is stuck), this
+                    // tears down BT/WiFi entirely and reconnects from scratch.
+                    Log.w(TAG, "🔌 Force-reconnecting adapter...")
+                    connection.forceReconnect()
+                    val result = JsonObject().apply {
+                        addProperty("status", "reconnected")
+                        addProperty("adapter", connection.adapterName)
+                    }
+                    TunnelResponse(200, result)
+                }
+
+                path == "/restart" -> {
+                    // Remotely restart the gateway service.
+                    // On Android, we invoke the restart callback which
+                    // disconnects + restarts the foreground service.
+                    Log.w(TAG, "🔄 Remote restart requested")
+                    val callback = onRestartRequested
+                    if (callback != null) {
+                        // Respond first, then trigger restart
+                        scope?.launch {
+                            delay(2000)
+                            callback()
+                        }
+                        val result = JsonObject().apply {
+                            addProperty("status", "restarting")
+                            addProperty("message", "Gateway will restart in ~2 seconds")
+                        }
+                        TunnelResponse(200, result)
+                    } else {
+                        TunnelResponse(500, errorJson("Restart not supported in this context"))
+                    }
                 }
 
                 // ── Sniffer (passive CAN bus capture) ──

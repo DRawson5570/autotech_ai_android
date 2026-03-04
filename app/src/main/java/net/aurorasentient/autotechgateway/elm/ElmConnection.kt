@@ -21,7 +21,6 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -88,6 +87,11 @@ data class DetectedAdapter(
  */
 sealed class ElmConnection {
 
+    companion object {
+        /** After this many consecutive timeouts, force a reconnect */
+        const val MAX_CONSECUTIVE_TIMEOUTS = 5
+    }
+
     protected val commandLock = Mutex()
     var lastActivity: Long = System.currentTimeMillis()
         protected set
@@ -97,6 +101,16 @@ sealed class ElmConnection {
         protected set
     var adapterVersion: String = ""
         protected set
+
+    // ── Watchdog state ────────────────────────────────────────────
+    @Volatile
+    var consecutiveTimeouts: Int = 0
+        protected set
+    @Volatile
+    var totalTimeouts: Int = 0
+        protected set
+    @Volatile
+    protected var needsReconnect: Boolean = false
 
     /**
      * Open the physical connection and run the AT init sequence.
@@ -110,11 +124,83 @@ sealed class ElmConnection {
 
     /**
      * Send an AT/OBD command and return the cleaned response.
-     * Thread-safe via mutex.
+     *
+     * Includes serial watchdog logic (mirrors connection.py v1.2.49):
+     * - Lock acquisition timeout (prevents deadlock from stuck command)
+     * - Consecutive timeout tracking & deferred auto-reconnect
+     * - Buffer flush when recovering from previous timeouts
      */
     suspend fun sendCommand(command: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): String {
-        commandLock.withLock {
-            return sendCommandInternal(command, timeoutMs)
+        // If a reconnect is pending from a previous cycle, do it before
+        // acquiring the lock (reconnect calls connect → initialize → sendCommand → needs lock).
+        if (needsReconnect) {
+            needsReconnect = false
+            Log.i(TAG, "Executing deferred reconnect before next command...")
+            forceReconnect()
+        }
+
+        // Use withTimeout on lock acquisition so a stuck command can't
+        // block all other commands forever.
+        val lockTimeoutMs = maxOf(timeoutMs, 10_000L)
+        try {
+            withTimeout(lockTimeoutMs) {
+                commandLock.lock()
+            }
+        } catch (_: TimeoutCancellationException) {
+            Log.e(TAG, "Lock acquisition timed out for '$command' — adapter is stuck")
+            consecutiveTimeouts++
+            totalTimeouts++
+            throw IOException("Adapter busy (lock timeout). Try reconnect-adapter.")
+        }
+
+        try {
+            val response = sendCommandInternal(command, timeoutMs)
+
+            if (response.isNotEmpty()) {
+                // Got a real response — reset timeout counter
+                consecutiveTimeouts = 0
+            } else {
+                consecutiveTimeouts++
+                totalTimeouts++
+                Log.w(TAG, "Empty response for '$command' " +
+                    "(consecutive timeouts: $consecutiveTimeouts/$MAX_CONSECUTIVE_TIMEOUTS)")
+
+                if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+                    Log.e(TAG, "Adapter unresponsive after $consecutiveTimeouts consecutive timeouts. " +
+                        "Scheduling reconnect for next command...")
+                    // Don't reconnect here — we're holding the lock and
+                    // reconnect calls sendCommand internally (deadlock).
+                    // Set a flag so the NEXT sendCommand call does it.
+                    needsReconnect = true
+                }
+            }
+
+            return response
+        } finally {
+            commandLock.unlock()
+        }
+    }
+
+    /**
+     * Force-close and reopen the connection to recover from a stuck adapter.
+     * Called outside the lock scope to avoid deadlock.
+     */
+    suspend fun forceReconnect() {
+        Log.w(TAG, "Force-reconnecting adapter...")
+        try {
+            try {
+                disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "Disconnect error during force-reconnect (ignored): ${e.message}")
+            }
+
+            delay(1500) // Let the transport release
+
+            connect()
+            consecutiveTimeouts = 0
+            Log.i(TAG, "Force-reconnect successful — adapter recovered")
+        } catch (e: Exception) {
+            Log.e(TAG, "Force-reconnect FAILED — adapter may need manual restart: ${e.message}")
         }
     }
 

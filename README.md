@@ -8,8 +8,10 @@ Android companion app for the Autotech AI diagnostic gateway. Connects to ELM327
 - **Live diagnostics**: Real-time PID monitoring with gauges
 - **DTC reading/clearing**: Read and clear diagnostic trouble codes
 - **VIN decoding**: Automatic VIN reading and vehicle identification
-- **Module discovery**: Scan all ECU modules (HS-CAN + MS-CAN for Ford)
+- **Module discovery**: Scan all ECU modules (HS-CAN + MS-CAN for Ford + SW-CAN/GMLAN for GM)
 - **UDS DID reading**: Read manufacturer-specific data identifiers
+- **GM SW-CAN support**: STP63 GMLAN (33.3 kbps, pin 1) for body/comfort modules
+- **GM Enhanced addressing**: +0x400 offset for GM HS-CAN modules (0x240-0x25F range)
 - **Server relay**: WebSocket tunnel to Autotech AI production server
 - **Foreground service**: Maintains persistent connection in background
 

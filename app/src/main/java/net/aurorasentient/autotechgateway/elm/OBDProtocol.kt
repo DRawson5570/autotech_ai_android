@@ -87,12 +87,65 @@ val UDS_NRC_CODES = mapOf(
     0x7F to "Service not supported in active session",
 )
 
+/** GM Enhanced CAN addresses (HS-CAN, 500 kbps, pins 6+14)
+ *  GM uses a +0x400 offset for responses (request 0x2xx → response 0x6xx) */
+val GM_ENHANCED_ADDRESSES = mapOf(
+    "PCM-E" to Pair(0x240, 0x640),
+    "BCM-E" to Pair(0x241, 0x641),
+    "TCM-E" to Pair(0x242, 0x642),
+    "EBCM"  to Pair(0x243, 0x643),
+    "HVAC-E" to Pair(0x244, 0x644),
+    "EPS"   to Pair(0x245, 0x645),
+    "Radio-E" to Pair(0x246, 0x646),
+    "IPC-E" to Pair(0x247, 0x647),
+    "TDM"   to Pair(0x248, 0x648),
+    "SDM"   to Pair(0x249, 0x649),
+    "MSM"   to Pair(0x24A, 0x64A),
+    "VCIM"  to Pair(0x24B, 0x64B),
+    "DIC"   to Pair(0x24C, 0x64C),
+    "PDM"   to Pair(0x24D, 0x64D),
+    "RIM"   to Pair(0x24E, 0x64E),
+    "RCDLR" to Pair(0x24F, 0x64F),
+    "TBC"   to Pair(0x250, 0x650),
+    "ORC"   to Pair(0x251, 0x651),
+    "PAM"   to Pair(0x252, 0x652),
+    "SWM"   to Pair(0x254, 0x654),
+)
+
+/** GM SW-CAN / GMLAN addresses (Single Wire CAN, 33.3 kbps, pin 1)
+ *  Body/comfort modules only accessible on SW-CAN. Same +0x400 response offset.
+ *  Per OBDLink FRPM manual: STP63 = ISO 15765, 11-bit, 33.3kbps (GMLAN diagnostic) */
+val GM_SW_CAN_ADDRESSES = mapOf(
+    "BCM"      to Pair(0x241, 0x641),
+    "HVAC"     to Pair(0x244, 0x644),
+    "Radio"    to Pair(0x246, 0x646),
+    "IPC"      to Pair(0x247, 0x647),
+    "TDM-SW"   to Pair(0x248, 0x648),
+    "MSM-SW"   to Pair(0x24A, 0x64A),
+    "VCIM"     to Pair(0x24B, 0x64B),
+    "DIC-SW"   to Pair(0x24C, 0x64C),
+    "PDM-SW"   to Pair(0x24D, 0x64D),
+    "RIM-SW"   to Pair(0x24E, 0x64E),
+    "RCDLR-SW" to Pair(0x24F, 0x64F),
+    "SWM-SW"   to Pair(0x254, 0x654),
+)
+
 /** Ford-specific WMI prefixes for MS-CAN detection */
 val FORD_WMI_PREFIXES = setOf(
     "1FA", "1FB", "1FC", "1FD", "1FM", "1FT", "1FV", "1FW",
     "2FA", "2FB", "2FC", "2FD", "2FM", "2FT",
     "3FA", "3FB", "3FC", "3FD", "3FM", "3FT",
     "MAJ", "NM0", "WF0",
+)
+
+/** GM WMI prefixes for SW-CAN/GMLAN detection (Buick, Cadillac, Chevrolet, GMC, etc.) */
+val GM_WMI_PREFIXES = setOf(
+    "1G1", "1G2", "1G3", "1G4", "1G6",
+    "1GC", "1GK", "1GM", "1GT", "1GY",
+    "2G1", "2G2", "2G4", "2GK", "2GT",
+    "3G1", "3G7", "3GK", "3GT",
+    "5GA", "5GR", "5GT",
+    "6G1",
 )
 
 /** Parsed DTC */
@@ -107,7 +160,7 @@ data class ECUModule(
     val name: String,
     val address: Int,
     val responseAddress: Int,
-    val bus: String,         // "HS-CAN" or "MS-CAN"
+    val bus: String,         // "HS-CAN", "MS-CAN", or "SW-CAN"
     val dids: Map<String, String> = emptyMap()
 )
 
@@ -130,7 +183,8 @@ data class AdapterCapabilities(
     val supportsSTMA: Boolean = false,   // CAN monitor all
     val supportsSTPX: Boolean = false,   // Protocol execute
     val supportsBatchPids: Boolean = false,  // Multi-PID per request
-    val maxBatchPids: Int = 1            // How many PIDs per frame (up to 6)
+    val maxBatchPids: Int = 1,           // How many PIDs per frame (up to 6)
+    val supportsSwCan: Boolean = false   // SW-CAN/GMLAN (STP63, pin 1)
 )
 
 /**
@@ -373,6 +427,10 @@ class OBDProtocol(private val connection: ElmConnection) {
             if (isSTN) 6 else 3  // STN handles 6 reliably, basic ELM327 sometimes chokes on >3
         } else 1
 
+        // SW-CAN capability: STN adapters with 3 CAN transceivers (e.g. OBDLink MX+)
+        // support STP63 for GMLAN on pin 1 at 33.3 kbps
+        val supportsSwCan = isSTN  // All STN2120-based adapters have the SW-CAN transceiver
+
         capabilities = AdapterCapabilities(
             isSTN = isSTN,
             deviceName = deviceName,
@@ -381,11 +439,12 @@ class OBDProtocol(private val connection: ElmConnection) {
             supportsSTMA = supportsSTMA,
             supportsSTPX = supportsSTPX,
             supportsBatchPids = supportsBatch,
-            maxBatchPids = maxBatch
+            maxBatchPids = maxBatch,
+            supportsSwCan = supportsSwCan
         )
 
         Log.i(TAG, "Adapter: $deviceName | STN=$isSTN | STAF=$supportsSTAF | " +
-                "STMA=$supportsSTMA | STPX=$supportsSTPX | batch=$maxBatch")
+                "STMA=$supportsSTMA | STPX=$supportsSTPX | batch=$maxBatch | SW-CAN=$supportsSwCan")
         return capabilities
     }
 
@@ -737,6 +796,18 @@ class OBDProtocol(private val connection: ElmConnection) {
             modules.addAll(msCanModules)
         }
 
+        // Phase 4: GM Enhanced HS-CAN (if VIN indicates GM)
+        if (vin != null && isGmVin(vin)) {
+            Log.i(TAG, "GM detected, scanning enhanced HS-CAN addresses...")
+            val gmHsModules = scanGmEnhancedHsCan(modules)
+            modules.addAll(gmHsModules)
+
+            // Phase 5: GM SW-CAN / GMLAN (33.3 kbps, pin 1)
+            Log.i(TAG, "Scanning GM SW-CAN/GMLAN (33.3 kbps, pin 1)...")
+            val swCanModules = scanSwCan(modules)
+            modules.addAll(swCanModules)
+        }
+
         Log.i(TAG, "Discovered ${modules.size} modules")
         return modules
     }
@@ -744,6 +815,11 @@ class OBDProtocol(private val connection: ElmConnection) {
     private fun isFordVin(vin: String): Boolean {
         if (vin.length < 3) return false
         return FORD_WMI_PREFIXES.contains(vin.take(3).uppercase())
+    }
+
+    private fun isGmVin(vin: String): Boolean {
+        if (vin.length < 3) return false
+        return GM_WMI_PREFIXES.contains(vin.take(3).uppercase())
     }
 
     private suspend fun scanMsCan(): List<ECUModule> {
@@ -799,6 +875,163 @@ class OBDProtocol(private val connection: ElmConnection) {
         return modules
     }
 
+    /**
+     * Phase 4: Scan GM Enhanced HS-CAN addresses (0x240-0x25F range).
+     * GM uses request 0x2xx -> response 0x6xx (+0x400 offset) on HS-CAN.
+     */
+    private suspend fun scanGmEnhancedHsCan(existingModules: List<ECUModule>): List<ECUModule> {
+        val modules = mutableListOf<ECUModule>()
+        val seenAddrs = existingModules.map { it.address }.toSet()
+
+        try {
+            // Ensure we're on HS-CAN
+            connection.sendCommand("STP6")
+            connection.sendCommand("STPC1")
+            connection.sendCommand("ATSP6")
+            connection.sendCommand("ATH1")
+            connection.sendCommand("ATS1")
+
+            for ((name, addrs) in GM_ENHANCED_ADDRESSES) {
+                val reqAddr = addrs.first
+                val respAddr = addrs.second
+
+                // Skip if already found via standard OBD addressing
+                if (seenAddrs.contains(reqAddr)) continue
+                // Skip PCM-E/TCM-E if standard PCM/TCM already found
+                if (name == "PCM-E" && existingModules.any { it.name == "PCM" }) continue
+                if (name == "TCM-E" && existingModules.any { it.name == "TCM" }) continue
+
+                connection.sendCommand("ATSH%03X".format(reqAddr))
+                connection.sendCommand("ATCRA%03X".format(respAddr))
+
+                // Try TesterPresent
+                var resp = connection.sendCommand("3E00", timeoutMs = 3000)
+                var found = isLiveResponse(resp)
+
+                if (!found) {
+                    // Try DiagnosticSessionControl
+                    resp = connection.sendCommand("1001", timeoutMs = 3000)
+                    found = isLiveResponse(resp)
+                }
+
+                if (found) {
+                    modules.add(ECUModule(name, reqAddr, respAddr, "HS-CAN"))
+                    Log.i(TAG, "GM HS-CAN Discovered: $name @ 0x${reqAddr.toString(16).uppercase()}")
+                }
+            }
+
+            // Reset CAN receive filter
+            connection.sendCommand("ATCRA")
+            connection.sendCommand("ATSH7DF")
+            connection.sendCommand("ATH0")
+            connection.sendCommand("ATS0")
+            connection.sendCommand("ATST32")
+
+        } catch (e: Exception) {
+            Log.w(TAG, "GM HS-CAN probing failed: ${e.message}")
+        }
+
+        Log.i(TAG, "Phase 4 complete: found ${modules.size} GM HS-CAN module(s)")
+        return modules
+    }
+
+    /**
+     * Phase 5: Scan GM SW-CAN / GMLAN (33.3 kbps, pin 1).
+     * Body/comfort modules accessible on Single Wire CAN.
+     * Per OBDLink FRPM manual: STP63 = ISO 15765, 11-bit, 33.3kbps.
+     * NOTE: STP31 is 500kbps HS-CAN raw — NOT GMLAN!
+     */
+    private suspend fun scanSwCan(existingModules: List<ECUModule>): List<ECUModule> {
+        val modules = mutableListOf<ECUModule>()
+        val seenAddrs = existingModules.map { it.address }.toSet()
+
+        // Switch to SW-CAN: STP63 first (ISO 15765 GMLAN), STP61 fallback (raw), ATPB last resort
+        var switched = false
+
+        // STP63 = ISO 15765, 11-bit Tx, 33.3kbps, DLC=8 (SW-CAN/GMLAN diagnostic)
+        val stp63Resp = connection.sendCommand("STP63", timeoutMs = 3000)
+        if (!stp63Resp.contains("?")) {
+            switched = true
+            Log.i(TAG, "SW-CAN via STP63 (GMLAN diagnostic)")
+        }
+
+        if (!switched) {
+            // STP61 = ISO 11898, 11-bit, 33.3kbps (raw SW-CAN)
+            val stp61Resp = connection.sendCommand("STP61", timeoutMs = 3000)
+            if (!stp61Resp.contains("?")) {
+                switched = true
+                Log.i(TAG, "SW-CAN via STP61 (raw)")
+            }
+        }
+
+        if (!switched) {
+            // Last resort: manual baud rate config for 33.3 kbps
+            connection.sendCommand("ATPB 8104")
+            val spbResp = connection.sendCommand("ATSPB", timeoutMs = 3000)
+            if (!spbResp.contains("?")) {
+                switched = true
+                Log.i(TAG, "SW-CAN via ATPB 8104 fallback")
+            }
+        }
+
+        if (!switched) {
+            Log.w(TAG, "Could not switch to SW-CAN/GMLAN")
+            return modules
+        }
+
+        currentBus = "SW-CAN"
+
+        // Extended timeout for slow 33.3 kbps bus
+        connection.sendCommand("ATSTFF")
+        connection.sendCommand("ATH1")
+        connection.sendCommand("ATS1")
+
+        // Probe GM SW-CAN module addresses
+        for ((name, addrs) in GM_SW_CAN_ADDRESSES) {
+            val reqAddr = addrs.first
+            val respAddr = addrs.second
+
+            // Skip if already found on HS-CAN (except BCM which may be on both)
+            if (seenAddrs.contains(reqAddr) && name != "BCM") continue
+
+            connection.sendCommand("ATSH%03X".format(reqAddr))
+            connection.sendCommand("ATCRA%03X".format(respAddr))
+
+            // Try TesterPresent (longer timeout for slow bus)
+            var resp = connection.sendCommand("3E00", timeoutMs = 4000)
+            var found = isLiveResponse(resp)
+
+            if (!found) {
+                // Try DiagnosticSessionControl
+                resp = connection.sendCommand("1001", timeoutMs = 4000)
+                found = isLiveResponse(resp)
+            }
+
+            if (found) {
+                // Use SW-CAN-specific name (not the enhanced HS-CAN name)
+                val moduleName = if (name.endsWith("-SW")) name.removeSuffix("-SW") else name
+                modules.add(ECUModule(moduleName, reqAddr, respAddr, "SW-CAN"))
+                Log.i(TAG, "SW-CAN Discovered: $moduleName @ 0x${reqAddr.toString(16).uppercase()}")
+            }
+        }
+
+        // Reset CAN receive filter
+        connection.sendCommand("ATCRA")
+
+        // Switch back to HS-CAN
+        connection.sendCommand("STP6")
+        connection.sendCommand("STPC1")
+        connection.sendCommand("ATSP6")
+        connection.sendCommand("ATSH7DF")
+        connection.sendCommand("ATH0")
+        connection.sendCommand("ATS0")
+        connection.sendCommand("ATST32")
+        currentBus = "HS-CAN"
+
+        Log.i(TAG, "Phase 5 complete: found ${modules.size} GM SW-CAN module(s)")
+        return modules
+    }
+
     // ── Diagnostic Snapshot ───────────────────────────────────────
 
     /**
@@ -848,6 +1081,31 @@ class OBDProtocol(private val connection: ElmConnection) {
                 }
                 currentBus = "MS-CAN"
             }
+            "SW-CAN" -> {
+                // Per OBDLink FRPM manual:
+                // STP63 = ISO 15765, 11-bit Tx, 33.3kbps, DLC=8 (SW-CAN/GMLAN diagnostic)
+                // NOTE: STP31 is 500kbps HS-CAN raw — NOT GMLAN!
+                var switched = false
+                val stp63Resp = connection.sendCommand("STP63", timeoutMs = 3000)
+                if (!stp63Resp.contains("?")) {
+                    switched = true
+                    Log.d(TAG, "Switched to SW-CAN via STP63")
+                }
+                if (!switched) {
+                    val stp61Resp = connection.sendCommand("STP61", timeoutMs = 3000)
+                    if (!stp61Resp.contains("?")) {
+                        switched = true
+                        Log.d(TAG, "Switched to SW-CAN via STP61 (raw)")
+                    }
+                }
+                if (!switched) {
+                    // Last resort: manual baud rate config for 33.3 kbps
+                    connection.sendCommand("ATPB 8104")
+                    connection.sendCommand("ATSPB")
+                    Log.d(TAG, "Switched to SW-CAN via ATPB 8104 fallback")
+                }
+                currentBus = "SW-CAN"
+            }
             else -> {
                 connection.sendCommand("STP6")
                 connection.sendCommand("STPC1")
@@ -857,8 +1115,18 @@ class OBDProtocol(private val connection: ElmConnection) {
         }
     }
 
+    /**
+     * Set CAN header and receive filter for a specific module.
+     * GM enhanced range (0x200-0x2FF) uses +0x400 response offset.
+     * Standard OBD-II (0x7E0-0x7EF) uses +8 response offset.
+     */
     private suspend fun targetModule(moduleAddr: Int) {
-        val respAddr = moduleAddr + 8
+        // GM enhanced address range uses +0x400 offset (request 0x2xx -> response 0x6xx)
+        val respAddr = if (moduleAddr in 0x200..0x2FF) {
+            moduleAddr + 0x400
+        } else {
+            moduleAddr + 8
+        }
         connection.sendCommand("ATSH%03X".format(moduleAddr))
         connection.sendCommand("ATCRA%03X".format(respAddr))
         connection.sendCommand("ATH1")

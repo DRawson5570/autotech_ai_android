@@ -666,80 +666,148 @@ class OBDProtocol(private val connection: ElmConnection) {
 
     /**
      * Read a UDS DID from a specific ECU module.
+     *
+     * Handles bus switching, Flow Control for User protocols, and
+     * ISO-TP multi-frame reassembly automatically.
      */
     suspend fun readDid(moduleAddr: Int, did: Int, bus: String = "HS-CAN"): DIDResult? {
-        switchBus(bus)
-        targetModule(moduleAddr)
+        var switchedBus = false
+        try {
+            switchedBus = bus.uppercase() != "HS-CAN"
+            switchBus(bus)
+            val respAddr = resolveResponseAddr(moduleAddr)
+            configureCanTarget(moduleAddr, respAddr, switchedBus)
 
-        // Enter extended session
-        connection.sendCommand("1003")
+            // Enter extended session
+            connection.sendCommand("1003")
 
-        // ReadDataByIdentifier (0x22) + DID
-        val cmd = "22%04X".format(did)
-        val resp = connection.sendCommand(cmd, timeoutMs = 8000)
-        if (!isLiveResponse(resp)) return null
+            // ReadDataByIdentifier (0x22) + DID
+            val cmd = "22%04X".format(did)
+            val resp = connection.sendCommand(cmd, timeoutMs = 8000)
+            if (!isLiveResponse(resp)) return null
 
-        // Check for negative response
-        if (resp.uppercase().startsWith("7F")) {
-            val nrc = if (resp.length >= 6) resp.substring(4, 6).toIntOrNull(16) else null
-            val nrcDesc = nrc?.let { UDS_NRC_CODES[it] } ?: "Unknown"
-            Log.w(TAG, "DID 0x${did.toString(16).uppercase()}: NRC $nrcDesc")
+            // Reassemble ISO-TP and parse
+            val respHex = "%03X".format(respAddr)
+            val cleaned = reassembleIsoTp(resp, respHex)
+
+            // Check for negative response
+            if (cleaned.uppercase().contains("7F22")) {
+                val nrcIdx = cleaned.uppercase().indexOf("7F22") + 4
+                val nrc = if (nrcIdx + 2 <= cleaned.length)
+                    cleaned.substring(nrcIdx, nrcIdx + 2).toIntOrNull(16) else null
+                val nrcDesc = nrc?.let { UDS_NRC_CODES[it] } ?: "Unknown"
+                Log.w(TAG, "DID 0x${did.toString(16).uppercase()}: NRC $nrcDesc")
+                return null
+            }
+
+            // Parse positive response: 62 + DID (2 bytes) + data
+            val didHex = "%04X".format(did)
+            val marker = "62$didHex"
+            val idx = cleaned.uppercase().indexOf(marker.uppercase())
+            if (idx < 0) return null
+
+            val dataHex = cleaned.substring(idx + marker.length)
+            if (dataHex.isEmpty()) return null
+
+            val decoded = decodeDIDValue(dataHex)
+            val description = STANDARD_DIDS[did] ?: "DID 0x${did.toString(16).uppercase()}"
+
+            return DIDResult(
+                did = didHex,
+                rawHex = dataHex,
+                decoded = decoded,
+                description = description
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "readDid(${moduleAddr.toString(16)}, ${did.toString(16)}) failed: ${e.message}")
             return null
+        } finally {
+            restoreCanDefaults(switchedBus)
         }
-
-        // Parse positive response: 62 + DID (2 bytes) + data
-        val hex = resp.replace(" ", "").replace("\n", "").uppercase()
-        if (!hex.startsWith("62")) return null
-
-        val dataHex = hex.drop(6)  // Skip "62" + 4-char DID
-        val decoded = decodeDIDValue(dataHex)
-        val description = STANDARD_DIDS[did] ?: "DID 0x${did.toString(16).uppercase()}"
-
-        return DIDResult(
-            did = "%04X".format(did),
-            rawHex = dataHex,
-            decoded = decoded,
-            description = description
-        )
     }
 
     /**
      * Read multiple DIDs from a module.
+     *
+     * Handles bus switching, Flow Control, and ISO-TP reassembly.
+     * Single bus switch for all DIDs.
      */
     suspend fun readDids(moduleAddr: Int, dids: List<Int>, bus: String = "HS-CAN"): Map<String, DIDResult> {
         val results = mutableMapOf<String, DIDResult>()
-        switchBus(bus)
-        targetModule(moduleAddr)
-        connection.sendCommand("1003")  // Extended session once
+        var switchedBus = false
+        try {
+            switchedBus = bus.uppercase() != "HS-CAN"
+            switchBus(bus)
+            val respAddr = resolveResponseAddr(moduleAddr)
+            configureCanTarget(moduleAddr, respAddr, switchedBus)
+            connection.sendCommand("1003")  // Extended session once
 
-        for (did in dids) {
-            val cmd = "22%04X".format(did)
-            val resp = connection.sendCommand(cmd, timeoutMs = 8000)
-            if (!isLiveResponse(resp)) continue
-            if (resp.uppercase().startsWith("7F")) continue
+            val respHex = "%03X".format(respAddr)
 
-            val hex = resp.replace(" ", "").replace("\n", "").uppercase()
-            if (!hex.startsWith("62")) continue
+            for (did in dids) {
+                try {
+                    val cmd = "22%04X".format(did)
+                    val resp = connection.sendCommand(cmd, timeoutMs = 8000)
+                    if (!isLiveResponse(resp)) continue
 
-            val dataHex = hex.drop(6)
-            val didKey = "%04X".format(did)
-            results[didKey] = DIDResult(
-                did = didKey,
-                rawHex = dataHex,
-                decoded = decodeDIDValue(dataHex),
-                description = STANDARD_DIDS[did] ?: didKey
-            )
+                    val cleaned = reassembleIsoTp(resp, respHex)
+
+                    // Check for negative response
+                    if (cleaned.uppercase().contains("7F22")) continue
+
+                    val didHex = "%04X".format(did)
+                    val marker = "62$didHex"
+                    val idx = cleaned.uppercase().indexOf(marker.uppercase())
+                    if (idx < 0) continue
+
+                    val dataHex = cleaned.substring(idx + marker.length)
+                    if (dataHex.isEmpty()) continue
+
+                    results[didHex] = DIDResult(
+                        did = didHex,
+                        rawHex = dataHex,
+                        decoded = decodeDIDValue(dataHex),
+                        description = STANDARD_DIDS[did] ?: didHex
+                    )
+                } catch (e: Exception) {
+                    Log.d(TAG, "DID ${did.toString(16)} failed: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "readDids failed: ${e.message}")
+        } finally {
+            restoreCanDefaults(switchedBus)
         }
         return results
     }
 
     /**
      * Send a raw UDS hex command to a specific module.
+     *
+     * Handles bus switching, Flow Control, and ISO-TP reassembly.
      */
     suspend fun sendUdsRaw(moduleAddr: Int, hexCmd: String, bus: String = "HS-CAN"): String {
-        switchBus(bus)
-        targetModule(moduleAddr)
-        return connection.sendCommand(hexCmd, timeoutMs = 10000)
+        var switchedBus = false
+        try {
+            switchedBus = bus.uppercase() != "HS-CAN"
+            switchBus(bus)
+            val respAddr = resolveResponseAddr(moduleAddr)
+            configureCanTarget(moduleAddr, respAddr, switchedBus)
+
+            val resp = connection.sendCommand(hexCmd, timeoutMs = 10000)
+            if (!isLiveResponse(resp)) return ""
+
+            // Reassemble ISO-TP multi-frame response
+            val respHex = "%03X".format(respAddr)
+            val cleaned = reassembleIsoTp(resp, respHex)
+            Log.d(TAG, "sendUdsRaw(${moduleAddr.toString(16)}, $hexCmd): $cleaned")
+            return cleaned
+        } catch (e: Exception) {
+            Log.e(TAG, "sendUdsRaw(${moduleAddr.toString(16)}, $hexCmd) failed: ${e.message}")
+            return ""
+        } finally {
+            restoreCanDefaults(switchedBus)
+        }
     }
 
     // ── Module Discovery ──────────────────────────────────────────
@@ -1246,6 +1314,148 @@ class OBDProtocol(private val connection: ElmConnection) {
         } else {
             hexData
         }
+    }
+
+    /**
+     * Compute the CAN response address for a given request address.
+     *
+     * Searches known address tables (Ford MS-CAN, GM Enhanced, GM SW-CAN,
+     * standard ECU) in order, then falls back to heuristics.
+     */
+    private fun resolveResponseAddr(moduleAddr: Int): Int {
+        // Search all known address tables: Pair(request, response)
+        val tables = listOf(FORD_MS_CAN_ADDRESSES, GM_ENHANCED_ADDRESSES,
+            GM_SW_CAN_ADDRESSES, ECU_ADDRESSES)
+        for (table in tables) {
+            for ((_, addrs) in table) {
+                if (addrs.first == moduleAddr) return addrs.second
+            }
+        }
+        // GM enhanced range: request 0x2XX → response 0x6XX
+        if (moduleAddr in 0x200..0x2FF) return moduleAddr + 0x400
+        return moduleAddr + 8
+    }
+
+    /**
+     * Set up CAN headers, receive filter, and Flow Control for a target module.
+     *
+     * For User protocols (SW-CAN/STP63, MS-CAN/STP33) the adapter's
+     * auto-FC doesn't know the correct header to send, so multi-frame
+     * ISO-TP responses fail — the ECU sends a First Frame, never
+     * receives a Flow Control, and the Consecutive Frames never come.
+     *
+     * This method explicitly configures FC for User protocols so multi-
+     * frame works on every bus.
+     *
+     * @param moduleAddr CAN request address (e.g. 0x247)
+     * @param respAddr   CAN response address (e.g. 0x647)
+     * @param switchedBus true if we switched away from HS-CAN
+     */
+    private suspend fun configureCanTarget(moduleAddr: Int, respAddr: Int, switchedBus: Boolean) {
+        connection.sendCommand("ATH1")
+        connection.sendCommand("ATSH%03X".format(moduleAddr))
+        connection.sendCommand("ATCRA%03X".format(respAddr))
+
+        if (switchedBus) {
+            // Explicit Flow Control for User protocols:
+            //   FC SH  = our transmit header (moduleAddr)
+            //   FC SD  = 30 00 00: FlowStatus=CTS, BlockSize=0, STmin=0
+            //   FC SM 1 = user-defined header + data
+            connection.sendCommand("AT FC SH %03X".format(moduleAddr))
+            connection.sendCommand("AT FC SD 30 00 00")
+            connection.sendCommand("AT FC SM 1")
+            Log.d(TAG, "Configured explicit FC: header=%03X, CTS/BS=0/STmin=0".format(moduleAddr))
+        }
+    }
+
+    /**
+     * Restore adapter to default HS-CAN state after a UDS request.
+     *
+     * @param switchedBus true if we switched away from HS-CAN
+     */
+    private suspend fun restoreCanDefaults(switchedBus: Boolean) {
+        if (switchedBus) {
+            // Restore FC to auto mode BEFORE switching protocol back,
+            // since FC SM 0 is protocol-independent.
+            try { connection.sendCommand("AT FC SM 0") } catch (_: Exception) {}
+            try { connection.sendCommand("STP6") } catch (_: Exception) {}
+            try { connection.sendCommand("STPC1") } catch (_: Exception) {}
+            try { connection.sendCommand("ATSP6") } catch (_: Exception) {}
+        }
+        try { connection.sendCommand("ATSH7DF") } catch (_: Exception) {}
+        try { connection.sendCommand("ATCRA") } catch (_: Exception) {}
+        try { connection.sendCommand("ATH0") } catch (_: Exception) {}
+    }
+
+    /**
+     * Reassemble ISO-TP multi-frame CAN response into clean hex data.
+     *
+     * Strips CAN headers from all frames and concatenates the UDS payload.
+     * For single-frame responses, strips the PCI length byte.
+     * For multi-frame responses, strips FF/CF PCI bytes and reassembles.
+     *
+     * @param rawResp       Raw response string from ELM327 (newline-separated CAN frames)
+     * @param respAddrHex   Expected CAN response address as 3-char hex (e.g. "7E8")
+     * @return Clean hex string containing only the UDS service response data
+     */
+    private fun reassembleIsoTp(rawResp: String, respAddrHex: String): String {
+        val addrUpper = respAddrHex.uppercase()
+        val headerLen = addrUpper.length
+
+        // Split into lines; strip whitespace, CAN header from each
+        val stripped = rawResp.trim().split('\n').mapNotNull { rawLine ->
+            var line = rawLine.trim().replace(" ", "").uppercase()
+            if (line.isEmpty() || line == ">" || "NODATA" in line || "ERROR" in line) {
+                null
+            } else {
+                // Strip CAN header if present
+                if (line.startsWith(addrUpper)) {
+                    line = line.substring(headerLen)
+                }
+                line
+            }
+        }
+
+        if (stripped.isEmpty()) return ""
+
+        if (stripped.size == 1) {
+            val frame = stripped[0]
+            // Single frame: PCI byte is 0{len} (2 hex chars)
+            // e.g. "065A90A3033C3C" → strip "06" → "5A90A3033C3C"
+            return if (frame.length >= 2 && frame[0] == '0') {
+                frame.substring(2)
+            } else {
+                frame
+            }
+        }
+
+        // Multi-frame: First Frame PCI is 1{LLL} (4 hex chars)
+        val first = stripped[0]
+        if (first.length >= 4 && first[0] == '1') {
+            val dataLen = try {
+                first.substring(1, 4).toInt(16)
+            } catch (_: NumberFormatException) {
+                9999 // fallback: take everything
+            }
+            // FF data starts after 4-char PCI
+            val dataParts = mutableListOf(first.substring(4))
+            // Consecutive frames: PCI is 2{seq} (2 hex chars)
+            for (cf in stripped.subList(1, stripped.size)) {
+                if (cf.length >= 2 && cf[0] == '2') {
+                    dataParts.add(cf.substring(2))
+                }
+            }
+            var reassembled = dataParts.joinToString("")
+            // Trim to declared length (length is in bytes, hex is 2 chars/byte)
+            val maxChars = dataLen * 2
+            if (reassembled.length > maxChars) {
+                reassembled = reassembled.substring(0, maxChars)
+            }
+            return reassembled
+        }
+
+        // Unrecognized framing — return first frame stripped of header only
+        return stripped[0]
     }
 }
 

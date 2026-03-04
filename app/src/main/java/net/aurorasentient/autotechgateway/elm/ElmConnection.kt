@@ -245,31 +245,25 @@ sealed class ElmConnection {
 
     /**
      * Clean an ELM327 response: strip prompt, remove echo, trim whitespace.
+     *
+     * Echo removal works by comparing the first line against the actual
+     * sent command. The previous approach whitelisted known response
+     * prefixes (7E, 4x, etc.) but missed CAN headers outside the standard
+     * range (e.g. 647, 600 on SW-CAN), destroying valid First Frames.
+     * Matching against the actual command is deterministic and correct
+     * for all buses.
      */
     protected fun cleanResponse(raw: String, sentCommand: String): String {
-        var cleaned = raw
+        val cleaned = raw
             .replace(">", "")
             .replace("\u0000", "")
             .trim()
 
-        // Remove echo line if present
         val lines = cleaned.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        if (lines.size > 1) {
-            val first = lines[0].uppercase()
-            if (first == sentCommand.uppercase() ||
-                first.startsWith(sentCommand.uppercase().take(3))) {
-                return lines.drop(1).joinToString("\n")
-            }
-        }
-
-        // Check if first line looks like a response vs echo
-        if (lines.isNotEmpty()) {
-            val first = lines[0].uppercase()
-            val isResponse = first.startsWith("4") || first.startsWith("7E") ||
-                first.startsWith("7F") || first == "OK" || first == "NO DATA" ||
-                first.startsWith("SEARCHING") || first.startsWith("ELM") ||
-                first.startsWith("STN") || first.startsWith("?")
-            if (!isResponse && lines.size > 1) {
+        if (lines.size >= 2) {
+            val cmdUpper = sentCommand.trim().replace(" ", "").uppercase()
+            val firstUpper = lines[0].trim().replace(" ", "").uppercase()
+            if (firstUpper == cmdUpper) {
                 return lines.drop(1).joinToString("\n")
             }
         }

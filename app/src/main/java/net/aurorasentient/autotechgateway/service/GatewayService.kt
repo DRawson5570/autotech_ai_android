@@ -358,8 +358,9 @@ class GatewayService : Service() {
 
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        @Suppress("WakelockTimeout")
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "autotechgateway:service").apply {
-            acquire(10 * 60 * 1000L)  // 10 minutes max
+            acquire()  // No timeout — held until releaseWakeLock(); foreground service signals ongoing work
         }
     }
 

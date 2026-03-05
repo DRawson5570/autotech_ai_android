@@ -18,6 +18,8 @@
 -keep class net.aurorasentient.autotechgateway.elm.** { *; }
 -keep class net.aurorasentient.autotechgateway.tunnel.** { *; }
 -keep class net.aurorasentient.autotechgateway.service.** { *; }
+-keep class net.aurorasentient.autotechgateway.crash.** { *; }
+-keep class net.aurorasentient.autotechgateway.update.** { *; }
 
 # Coroutines
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}

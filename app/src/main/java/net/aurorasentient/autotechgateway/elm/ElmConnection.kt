@@ -407,8 +407,8 @@ class BleConnection(
 
     @Volatile
     private var connectionReady = false
-    private val connectLatch = CompletableDeferred<Boolean>()
-    private val servicesLatch = CompletableDeferred<Boolean>()
+    private var connectLatch = CompletableDeferred<Boolean>()
+    private var servicesLatch = CompletableDeferred<Boolean>()
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
@@ -484,6 +484,10 @@ class BleConnection(
 
     override suspend fun connect() {
         Log.i(TAG, "Connecting to BLE: ${device.name} (${device.address})")
+
+        // Reset latches for reconnect support (CompletableDeferred is one-shot)
+        connectLatch = CompletableDeferred()
+        servicesLatch = CompletableDeferred()
 
         gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
 

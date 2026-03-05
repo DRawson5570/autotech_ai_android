@@ -166,6 +166,12 @@ class GatewayTunnel(
                     ws.send("""{"type":"pong"}""")
                 }
 
+                "error" -> {
+                    val errMsg = msg.get("message")?.asString ?: "Unknown server error"
+                    Log.e(TAG, "Server error: $errMsg")
+                    statusListener?.onTunnelError(errMsg)
+                }
+
                 "request" -> {
                     val id = msg.get("id")?.asString ?: return
                     val method = msg.get("method")?.asString ?: "GET"

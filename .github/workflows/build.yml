@@ -39,6 +39,11 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           # Update versionName in build.gradle.kts
           sed -i "s/versionName = \".*\"/versionName = \"$VERSION\"/" app/build.gradle.kts
+          # Update versionCode from tag (1.0.10 -> 1010)
+          VERSION_CODE=$(echo "$VERSION" | sed 's/\.//g' | sed 's/^0*//')
+          sed -i "s/versionCode = [0-9]*/versionCode = $VERSION_CODE/" app/build.gradle.kts
+          # Update VERSION constant in AutotechApp.kt
+          sed -i "s/const val VERSION = \".*\"/const val VERSION = \"$VERSION\"/" app/src/main/java/net/aurorasentient/autotechgateway/AutotechApp.kt
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew

@@ -61,6 +61,10 @@ class GatewayTunnel(
     /** Callback invoked when a remote /restart request is received. */
     var onRestartRequested: (() -> Unit)? = null
 
+    /** Callback invoked when a remote /check-update request is received.
+     *  Returns a JSON-serializable map with update status. */
+    var onCheckUpdateRequested: (suspend () -> Map<String, Any?>)? = null
+
     interface StatusListener {
         fun onTunnelConnected()
         fun onTunnelDisconnected()
@@ -541,6 +545,30 @@ class GatewayTunnel(
                         TunnelResponse(200, result)
                     } else {
                         TunnelResponse(500, errorJson("Restart not supported in this context"))
+                    }
+                }
+
+                cleanPath == "/check-update" -> {
+                    Log.i(TAG, "🔄 Remote update check requested")
+                    val callback = onCheckUpdateRequested
+                    if (callback != null) {
+                        try {
+                            val updateResult = callback()
+                            val result = JsonObject()
+                            for ((key, value) in updateResult) {
+                                when (value) {
+                                    is String -> result.addProperty(key, value)
+                                    is Boolean -> result.addProperty(key, value)
+                                    is Number -> result.addProperty(key, value)
+                                    null -> result.add(key, com.google.gson.JsonNull.INSTANCE)
+                                }
+                            }
+                            TunnelResponse(200, result)
+                        } catch (e: Exception) {
+                            TunnelResponse(500, errorJson("Update check failed: ${e.message}"))
+                        }
+                    } else {
+                        TunnelResponse(500, errorJson("Update not supported"))
                     }
                 }
 

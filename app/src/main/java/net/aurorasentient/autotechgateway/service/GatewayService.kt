@@ -235,6 +235,32 @@ class GatewayService : Service() {
                 }
             }
 
+            // Wire up remote update check
+            onCheckUpdateRequested = {
+                val updater = net.aurorasentient.autotechgateway.update.AutoUpdater(this@GatewayService)
+                val info = updater.checkForUpdate()
+                if (info.available) {
+                    // Trigger download + install in background (responds first)
+                    serviceScope.launch {
+                        val success = updater.downloadAndInstall(info.downloadUrl)
+                        if (success) {
+                            Log.i(TAG, "Update downloaded, Android installer launched")
+                        }
+                    }
+                    mapOf(
+                        "status" to "updating",
+                        "from_version" to info.currentVersion,
+                        "to_version" to info.latestVersion,
+                        "message" to "Downloading v${info.latestVersion}, install prompt will appear on device"
+                    )
+                } else {
+                    mapOf(
+                        "status" to "up-to-date",
+                        "version" to info.currentVersion
+                    )
+                }
+            }
+
             statusListener = object : GatewayTunnel.StatusListener {
                 override fun onTunnelConnected() {
                     Log.i(TAG, "Tunnel connected, awaiting registration...")

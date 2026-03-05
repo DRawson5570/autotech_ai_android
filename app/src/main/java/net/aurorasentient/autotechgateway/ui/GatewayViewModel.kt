@@ -77,9 +77,26 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
             gatewayService = service
             bound = true
 
-            // Observe service status
+            // Observe service status and show toast on key transitions
             viewModelScope.launch {
+                var prevState: GatewayState? = null
                 service.status.collect { status ->
+                    // Show toast on tunnel lifecycle transitions
+                    if (prevState != status.state) {
+                        when (status.state) {
+                            GatewayState.TUNNEL_ACTIVE ->
+                                _toastMessage.value = "Tunnel active — ready for remote queries"
+                            GatewayState.CONNECTED -> {
+                                // Went from TUNNEL_ACTIVE/TUNNEL_CONNECTING back to CONNECTED
+                                if (prevState == GatewayState.TUNNEL_ACTIVE ||
+                                    prevState == GatewayState.TUNNEL_CONNECTING) {
+                                    _toastMessage.value = status.errorMessage ?: "Tunnel disconnected"
+                                }
+                            }
+                            else -> {}
+                        }
+                        prevState = status.state
+                    }
                     _status.value = status
                 }
             }
@@ -186,7 +203,19 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
             viewModelScope.launch { _toastMessage.value = "Set Shop ID in Settings first" }
             return
         }
-        gatewayService?.startTunnel(shopId, apiKey)
+        val service = gatewayService
+        if (service == null) {
+            viewModelScope.launch { _toastMessage.value = "Service not ready — try again" }
+            return
+        }
+        val started = service.startTunnel(shopId, apiKey)
+        viewModelScope.launch {
+            if (started) {
+                _toastMessage.value = "Connecting tunnel..."
+            } else {
+                _toastMessage.value = "Cannot start tunnel — connect to adapter first"
+            }
+        }
     }
 
     fun stopTunnel() {

@@ -205,12 +205,24 @@ class GatewayService : Service() {
 
     /**
      * Start the server tunnel.
+     * @return true if tunnel was initiated, false if preconditions not met.
      */
-    fun startTunnel(shopId: String, apiKey: String) {
-        val conn = connection ?: return
-        val proto = protocol ?: return
+    fun startTunnel(shopId: String, apiKey: String): Boolean {
+        val conn = connection
+        if (conn == null) {
+            Log.w(TAG, "startTunnel: no active connection")
+            updateState(GatewayState.CONNECTED, errorMessage = "Connect to adapter first")
+            return false
+        }
+        val proto = protocol
+        if (proto == null) {
+            Log.w(TAG, "startTunnel: protocol not initialized")
+            updateState(GatewayState.CONNECTED, errorMessage = "Adapter not ready")
+            return false
+        }
 
         updateState(GatewayState.TUNNEL_CONNECTING)
+        updateNotification("Tunnel connecting...")
 
         tunnel = GatewayTunnel(shopId, apiKey, proto, conn).apply {
             // Wire up restart callback — disconnect and restart the service
@@ -225,7 +237,7 @@ class GatewayService : Service() {
 
             statusListener = object : GatewayTunnel.StatusListener {
                 override fun onTunnelConnected() {
-                    Log.i(TAG, "Tunnel connected")
+                    Log.i(TAG, "Tunnel connected, awaiting registration...")
                 }
 
                 override fun onTunnelRegistered() {
@@ -237,8 +249,10 @@ class GatewayService : Service() {
 
                 override fun onTunnelDisconnected() {
                     serviceScope.launch {
-                        if (_status.value.state == GatewayState.TUNNEL_ACTIVE) {
-                            updateState(GatewayState.CONNECTED, tunnelRegistered = false)
+                        if (_status.value.state == GatewayState.TUNNEL_ACTIVE ||
+                            _status.value.state == GatewayState.TUNNEL_CONNECTING) {
+                            updateState(GatewayState.CONNECTED, tunnelRegistered = false,
+                                errorMessage = "Tunnel disconnected")
                             updateNotification("Tunnel disconnected | ${_status.value.adapterName}")
                         }
                     }
@@ -246,10 +260,20 @@ class GatewayService : Service() {
 
                 override fun onTunnelError(message: String) {
                     Log.e(TAG, "Tunnel error: $message")
+                    serviceScope.launch {
+                        updateState(
+                            if (_status.value.state == GatewayState.TUNNEL_CONNECTING)
+                                GatewayState.CONNECTED else _status.value.state,
+                            tunnelRegistered = false,
+                            errorMessage = "Tunnel error: $message"
+                        )
+                        updateNotification("Tunnel error | ${_status.value.adapterName}")
+                    }
                 }
             }
             start(serviceScope)
         }
+        return true
     }
 
     /**

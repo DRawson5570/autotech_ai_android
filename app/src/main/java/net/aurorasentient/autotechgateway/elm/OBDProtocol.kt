@@ -21,70 +21,176 @@ val ECU_ADDRESSES = mapOf(
     "HVAC" to Pair(0x7E5, 0x7ED),
 )
 
-/** Ford MS-CAN module addresses (secondary bus, 125 kbps) */
+/** Ford MS-CAN module addresses (secondary bus, 125 kbps)
+ *  Response addr → {request addr, name}
+ *  Validated from Python protocol.py (source of truth) */
 val FORD_MS_CAN_ADDRESSES = mapOf(
     "PCM-MS"  to Pair(0x720, 0x728),
-    "GEM"     to Pair(0x760, 0x768),
-    "IPC"     to Pair(0x740, 0x748),
+    "TCM"     to Pair(0x721, 0x729),
     "APIM"    to Pair(0x726, 0x72E),
+    "ACM"     to Pair(0x727, 0x72F),
+    "FCDIM"   to Pair(0x731, 0x739),
+    "IPMA"    to Pair(0x733, 0x73B),
+    "IPC"     to Pair(0x740, 0x748),
+    "SCCM"    to Pair(0x746, 0x74E),
+    "PAM"     to Pair(0x750, 0x758),
+    "GEM"     to Pair(0x760, 0x768),
+    "RCM"     to Pair(0x764, 0x76C),
+    "ABS"     to Pair(0x765, 0x76D),
     "HVAC-MS" to Pair(0x7A0, 0x7A8),
     "TPMS"    to Pair(0x7B0, 0x7B8),
-    "PSCM"    to Pair(0x730, 0x738),
-    "ACM"     to Pair(0x770, 0x778),
-    "RCM"     to Pair(0x790, 0x798),
-    "DDM"     to Pair(0x744, 0x74C),
-    "PDM"     to Pair(0x745, 0x74D),
-    "PAM"     to Pair(0x736, 0x73E),
-    "SCCM"    to Pair(0x724, 0x72C),
-    "OCS"     to Pair(0x765, 0x76D),
-    "ABS-MS"  to Pair(0x760, 0x768),
+    "PSCM"    to Pair(0x7C0, 0x7C8),
+    "DDM"     to Pair(0x7C4, 0x7CC),
+    "PDM"     to Pair(0x7C5, 0x7CD),
+    "AWD"     to Pair(0x7D0, 0x7D8),
     "FCIM"    to Pair(0x7A6, 0x7AE),
     "GPSM"    to Pair(0x701, 0x709),
 )
 
-/** Standard UDS DIDs (ISO 14229) */
+/** Standard UDS DIDs (ISO 14229-1:2020 §C.1)
+ *  Range 0xF180-0xF19F: Standardized identification DIDs */
 val STANDARD_DIDS = mapOf(
-    0xF186 to "Active diagnostic session",
-    0xF187 to "Spare part number",
-    0xF188 to "ECU software number",
-    0xF189 to "ECU software version",
-    0xF18A to "System supplier ID",
-    0xF18B to "ECU manufacturing date",
-    0xF18C to "ECU serial number",
+    // --- Boot / Application Software Identification ---
+    0xF180 to "Boot Software ID",
+    0xF181 to "Application Software ID",
+    0xF182 to "Application Data ID",
+    // --- Fingerprints (who last flashed what) ---
+    0xF183 to "Boot Software Fingerprint",
+    0xF184 to "Application Software Fingerprint",
+    0xF185 to "Application Data Fingerprint",
+    // --- Active Session ---
+    0xF186 to "Active Diagnostic Session",
+    // --- Vehicle Manufacturer IDs ---
+    0xF187 to "Part Number",
+    0xF188 to "ECU Software Number",
+    0xF189 to "Software Version",
+    0xF18A to "System Supplier ID",
+    0xF18B to "ECU Manufacturing Date",
+    0xF18C to "ECU Serial Number",
+    0xF18D to "Supported Functional Units",
+    0xF18E to "Kit Assembly Part Number",
+    0xF18F to "Regulation Software ID Numbers",
+    // --- Vehicle / Hardware IDs ---
     0xF190 to "VIN",
-    0xF191 to "ECU hardware number",
-    0xF192 to "System supplier ECU hardware number",
-    0xF193 to "System supplier ECU hardware version",
-    0xF194 to "System supplier ECU software number",
-    0xF195 to "System supplier ECU software version",
-    0xF197 to "System name or engine type",
-    0xF199 to "Programming date",
-    0xF19E to "ASAM/ODX file ID",
+    0xF191 to "ECU Hardware Number",
+    0xF192 to "Supplier HW Number",
+    0xF193 to "Supplier HW Version",
+    0xF194 to "Supplier SW Number",
+    0xF195 to "Supplier SW Version",
+    0xF196 to "Exhaust Regulation Number",
+    0xF197 to "System Name / Engine Type",
+    // --- Programming / Calibration History ---
+    0xF198 to "Repair Shop Code",
+    0xF199 to "Programming Date",
+    0xF19A to "Calibration Shop Code",
+    0xF19B to "Calibration Date",
+    0xF19C to "Calibration Equipment SW Number",
+    0xF19D to "ECU Installation Date",
+    0xF19E to "ODX File Reference",
+    0xF19F to "Entity Data ID",
+    // --- UDS Protocol ---
+    0xFF00 to "UDS Version",
 )
 
-/** UDS Negative Response Codes (ISO 14229-1:2020) */
+/** Ford-specific identification DIDs
+ *  Ford ECUs (especially MS-CAN modules) often DON'T respond to F1xx standard
+ *  identification DIDs. Instead, Ford uses manufacturer-specific DID ranges.
+ *  These are well-known from FORScan and empirical testing. */
+val FORD_IDENTIFICATION_DIDS = mapOf(
+    // --- Diagnostic Data (DDxx) — most commonly supported ---
+    0xDD00 to "Diagnostic Data 00",
+    0xDD01 to "Calibration ID / Odometer",
+    0xDD02 to "Calibration Verification Number",
+    0xDD03 to "Module Software Version",
+    0xDD04 to "Module Hardware Version",
+    0xDD05 to "Diagnostic Data 05",
+    // --- Status/Config (DExx) ---
+    0xDE00 to "Module Configuration 00",
+    0xDE01 to "Module Configuration 01",
+    0xDE02 to "Module Configuration 02",
+    0xDE03 to "Module Configuration 03",
+    // --- Common Ford F1xx that sometimes work ---
+    0xF110 to "ECU Part Number (Ford)",
+    0xF111 to "ECU Hardware Version (Ford)",
+    0xF113 to "Module Status (Ford)",
+    0xF124 to "Calibration Module ID",
+    0xF125 to "Ford Strategy Code",
+)
+
+/** UDS Negative Response Codes (ISO 14229-1:2020 §A.1)
+ *  Service 0x7F returns: 7F <rejected-SID> <NRC> */
 val UDS_NRC_CODES = mapOf(
-    0x10 to "General reject",
-    0x11 to "Service not supported",
-    0x12 to "Sub-function not supported",
-    0x13 to "Incorrect message length or invalid format",
-    0x14 to "Response too long",
-    0x22 to "Conditions not correct",
-    0x24 to "Request sequence error",
-    0x25 to "No response from sub-net component",
-    0x26 to "Failure prevents execution",
-    0x31 to "Request out of range",
-    0x33 to "Security access denied",
-    0x35 to "Invalid key",
-    0x36 to "Exceeded number of attempts",
-    0x37 to "Required time delay not expired",
-    0x70 to "Upload/download not accepted",
-    0x71 to "Transfer data suspended",
-    0x72 to "General programming failure",
-    0x73 to "Wrong block sequence counter",
-    0x78 to "Request correctly received — response pending",
-    0x7E to "Sub-function not supported in active session",
-    0x7F to "Service not supported in active session",
+    // --- General ---
+    0x10 to "generalReject",
+    0x11 to "serviceNotSupported",
+    0x12 to "subFunctionNotSupported",
+    0x13 to "incorrectMessageLengthOrInvalidFormat",
+    0x14 to "responseTooLong",
+    // --- Timing ---
+    0x21 to "busyRepeatRequest",
+    0x22 to "conditionsNotCorrect",
+    0x23 to "routineNotComplete",
+    0x24 to "requestSequenceError",
+    0x25 to "noResponseFromSubnetComponent",
+    0x26 to "failurePreventsExecutionOfRequestedAction",
+    // --- Data / Range ---
+    0x31 to "requestOutOfRange",
+    // --- Security ---
+    0x33 to "securityAccessDenied",
+    0x34 to "authenticationRequired",
+    0x35 to "invalidKey",
+    0x36 to "exceededNumberOfAttempts",
+    0x37 to "requiredTimeDelayNotExpired",
+    0x38 to "secureDataTransmissionRequired",
+    0x39 to "secureDataTransmissionNotAllowed",
+    0x3A to "secureDataVerificationFailed",
+    // --- Certificate Verification (ISO 14229-1:2020) ---
+    0x50 to "certificateVerificationFailed_InvalidTimePeriod",
+    0x51 to "certificateVerificationFailed_InvalidSignature",
+    0x52 to "certificateVerificationFailed_InvalidChainOfTrust",
+    0x53 to "certificateVerificationFailed_InvalidType",
+    0x54 to "certificateVerificationFailed_InvalidFormat",
+    0x55 to "certificateVerificationFailed_InvalidContent",
+    0x56 to "certificateVerificationFailed_InvalidScope",
+    0x57 to "certificateVerificationFailed_InvalidCertificate",
+    0x58 to "ownershipVerificationFailed",
+    0x59 to "challengeCalculationFailed",
+    0x5A to "settingAccessRightsFailed",
+    0x5B to "sessionKeyCreationDerivationFailed",
+    0x5C to "configurationDataUsageFailed",
+    0x5D to "deAuthenticationFailed",
+    // --- Upload / Download ---
+    0x70 to "uploadDownloadNotAccepted",
+    0x71 to "transferDataSuspended",
+    0x72 to "generalProgrammingFailure",
+    0x73 to "wrongBlockSequenceCounter",
+    // --- Response Pending ---
+    0x78 to "requestCorrectlyReceivedResponsePending",
+    // --- Sub-function ---
+    0x7E to "subFunctionNotSupportedInActiveSession",
+    0x7F to "serviceNotSupportedInActiveSession",
+    // --- Vehicle Condition ---
+    0x81 to "rpmTooHigh",
+    0x82 to "rpmTooLow",
+    0x83 to "engineIsRunning",
+    0x84 to "engineIsNotRunning",
+    0x85 to "engineRunTimeTooLow",
+    0x86 to "temperatureTooHigh",
+    0x87 to "temperatureTooLow",
+    0x88 to "vehicleSpeedTooHigh",
+    0x89 to "vehicleSpeedTooLow",
+    0x8A to "throttlePedalTooHigh",
+    0x8B to "throttlePedalTooLow",
+    0x8C to "transmissionRangeNotInNeutral",
+    0x8D to "transmissionRangeNotInGear",
+    0x8F to "brakeSwitchNotClosed",
+    0x90 to "shifterLeverNotInPark",
+    0x91 to "torqueConverterClutchLocked",
+    // --- Voltage ---
+    0x92 to "voltageTooHigh",
+    0x93 to "voltageTooLow",
+    // --- Resource ---
+    0x94 to "resourceTemporarilyNotAvailable",
 )
 
 /** GM Enhanced CAN addresses (HS-CAN, 500 kbps, pins 6+14)
@@ -672,11 +778,12 @@ class OBDProtocol(private val connection: ElmConnection) {
      */
     suspend fun readDid(moduleAddr: Int, did: Int, bus: String = "HS-CAN"): DIDResult? {
         var switchedBus = false
+        var explicitFc = false
         try {
             switchedBus = bus.uppercase() != "HS-CAN"
             switchBus(bus)
             val respAddr = resolveResponseAddr(moduleAddr)
-            configureCanTarget(moduleAddr, respAddr, switchedBus)
+            explicitFc = configureCanTarget(moduleAddr, respAddr, switchedBus)
 
             // Enter extended session
             connection.sendCommand("1003")
@@ -722,7 +829,7 @@ class OBDProtocol(private val connection: ElmConnection) {
             Log.e(TAG, "readDid(${moduleAddr.toString(16)}, ${did.toString(16)}) failed: ${e.message}")
             return null
         } finally {
-            restoreCanDefaults(switchedBus)
+            restoreCanDefaults(switchedBus, explicitFc)
         }
     }
 
@@ -735,11 +842,12 @@ class OBDProtocol(private val connection: ElmConnection) {
     suspend fun readDids(moduleAddr: Int, dids: List<Int>, bus: String = "HS-CAN"): Map<String, DIDResult> {
         val results = mutableMapOf<String, DIDResult>()
         var switchedBus = false
+        var explicitFc = false
         try {
             switchedBus = bus.uppercase() != "HS-CAN"
             switchBus(bus)
             val respAddr = resolveResponseAddr(moduleAddr)
-            configureCanTarget(moduleAddr, respAddr, switchedBus)
+            explicitFc = configureCanTarget(moduleAddr, respAddr, switchedBus)
             connection.sendCommand("1003")  // Extended session once
 
             val respHex = "%03X".format(respAddr)
@@ -776,7 +884,7 @@ class OBDProtocol(private val connection: ElmConnection) {
         } catch (e: Exception) {
             Log.e(TAG, "readDids failed: ${e.message}")
         } finally {
-            restoreCanDefaults(switchedBus)
+            restoreCanDefaults(switchedBus, explicitFc)
         }
         return results
     }
@@ -788,11 +896,12 @@ class OBDProtocol(private val connection: ElmConnection) {
      */
     suspend fun sendUdsRaw(moduleAddr: Int, hexCmd: String, bus: String = "HS-CAN"): String {
         var switchedBus = false
+        var explicitFc = false
         try {
             switchedBus = bus.uppercase() != "HS-CAN"
             switchBus(bus)
             val respAddr = resolveResponseAddr(moduleAddr)
-            configureCanTarget(moduleAddr, respAddr, switchedBus)
+            explicitFc = configureCanTarget(moduleAddr, respAddr, switchedBus)
 
             val resp = connection.sendCommand(hexCmd, timeoutMs = 10000)
             if (!isLiveResponse(resp)) return ""
@@ -806,7 +915,7 @@ class OBDProtocol(private val connection: ElmConnection) {
             Log.e(TAG, "sendUdsRaw(${moduleAddr.toString(16)}, $hexCmd) failed: ${e.message}")
             return ""
         } finally {
-            restoreCanDefaults(switchedBus)
+            restoreCanDefaults(switchedBus, explicitFc)
         }
     }
 
@@ -1337,47 +1446,61 @@ class OBDProtocol(private val connection: ElmConnection) {
     }
 
     /**
+     * Check if address is in the standard OBD-II range (0x7E0-0x7E7).
+     *
+     * The ELM327/STN auto-FC only handles these addresses automatically.
+     * Any other address (GM enhanced 0x2XX, Ford MS-CAN 0x7XX, etc.)
+     * needs explicit Flow Control configuration for multi-frame responses.
+     */
+    private fun isStandardOdbAddr(moduleAddr: Int): Boolean =
+        moduleAddr in 0x7E0..0x7E7
+
+    /**
      * Set up CAN headers, receive filter, and Flow Control for a target module.
      *
-     * For User protocols (SW-CAN/STP63, MS-CAN/STP33) the adapter's
-     * auto-FC doesn't know the correct header to send, so multi-frame
-     * ISO-TP responses fail — the ECU sends a First Frame, never
-     * receives a Flow Control, and the Consecutive Frames never come.
-     *
-     * This method explicitly configures FC for User protocols so multi-
-     * frame works on every bus.
+     * Configures explicit FC in two cases:
+     * 1. User protocols (SW-CAN/STP63, MS-CAN/STP33) — the adapter's
+     *    auto-FC doesn't know the correct header.
+     * 2. Non-standard addresses on HS-CAN (e.g. GM enhanced 0x243,
+     *    0x24C) — auto-FC only handles 0x7E0-0x7E7.
      *
      * @param moduleAddr CAN request address (e.g. 0x247)
      * @param respAddr   CAN response address (e.g. 0x647)
      * @param switchedBus true if we switched away from HS-CAN
+     * @return true if explicit FC was configured (caller must restore)
      */
-    private suspend fun configureCanTarget(moduleAddr: Int, respAddr: Int, switchedBus: Boolean) {
+    private suspend fun configureCanTarget(moduleAddr: Int, respAddr: Int, switchedBus: Boolean): Boolean {
         connection.sendCommand("ATH1")
         connection.sendCommand("ATSH%03X".format(moduleAddr))
         connection.sendCommand("ATCRA%03X".format(respAddr))
 
-        if (switchedBus) {
-            // Explicit Flow Control for User protocols:
+        val needFc = switchedBus || !isStandardOdbAddr(moduleAddr)
+        if (needFc) {
+            // Explicit Flow Control:
             //   FC SH  = our transmit header (moduleAddr)
             //   FC SD  = 30 00 00: FlowStatus=CTS, BlockSize=0, STmin=0
             //   FC SM 1 = user-defined header + data
             connection.sendCommand("AT FC SH %03X".format(moduleAddr))
             connection.sendCommand("AT FC SD 30 00 00")
             connection.sendCommand("AT FC SM 1")
-            Log.d(TAG, "Configured explicit FC: header=%03X, CTS/BS=0/STmin=0".format(moduleAddr))
+            Log.d(TAG, "Configured explicit FC: header=%03X, CTS/BS=0/STmin=0 (busSwitched=$switchedBus, nonStdAddr=${!isStandardOdbAddr(moduleAddr)})".format(moduleAddr))
         }
+        return needFc
     }
 
     /**
      * Restore adapter to default HS-CAN state after a UDS request.
      *
      * @param switchedBus true if we switched away from HS-CAN
+     * @param explicitFc  true if explicit Flow Control was configured
+     *                    (non-standard addr or non-HS-CAN bus)
      */
-    private suspend fun restoreCanDefaults(switchedBus: Boolean) {
-        if (switchedBus) {
-            // Restore FC to auto mode BEFORE switching protocol back,
-            // since FC SM 0 is protocol-independent.
+    private suspend fun restoreCanDefaults(switchedBus: Boolean, explicitFc: Boolean = false) {
+        if (explicitFc) {
+            // Restore FC to auto mode — must happen before protocol switch
             try { connection.sendCommand("AT FC SM 0") } catch (_: Exception) {}
+        }
+        if (switchedBus) {
             try { connection.sendCommand("STP6") } catch (_: Exception) {}
             try { connection.sendCommand("STPC1") } catch (_: Exception) {}
             try { connection.sendCommand("ATSP6") } catch (_: Exception) {}

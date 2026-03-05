@@ -284,9 +284,11 @@ class GatewayTunnel(
      * Maps server API paths to local protocol calls.
      */
     private suspend fun handleRequest(method: String, path: String, body: JsonObject?): TunnelResponse {
+        // Strip query parameters — the server proxy may append ?user_id=... etc.
+        val cleanPath = path.substringBefore("?")
         return try {
             when {
-                path == "/" || path == "/status" -> {
+                cleanPath == "/" || cleanPath == "/status" -> {
                     val status = JsonObject().apply {
                         addProperty("status", "connected")
                         addProperty("adapter", connection.adapterName)
@@ -296,7 +298,7 @@ class GatewayTunnel(
                     TunnelResponse(200, status)
                 }
 
-                path == "/vin" -> {
+                cleanPath == "/vin" -> {
                     val vin = protocol.readVin()
                     val result = JsonObject().apply {
                         addProperty("vin", vin ?: "")
@@ -309,30 +311,39 @@ class GatewayTunnel(
                     TunnelResponse(200, result)
                 }
 
-                path == "/dtcs" -> {
-                    val dtcs = protocol.readAllDtcs()
-                    val result = JsonObject().apply {
-                        addProperty("count", dtcs.size)
+                cleanPath == "/dtcs" -> {
+                    // Return categorized DTCs matching the Windows gateway format:
+                    // {"stored": [...], "pending": [...], "permanent": [...]}
+                    val stored = protocol.readDtcsMode("03", "stored")
+                    val pending = protocol.readDtcsMode("07", "pending")
+                    val permanent = protocol.readDtcsMode("0A", "permanent")
+
+                    fun dtcArray(dtcs: List<net.aurorasentient.autotechgateway.elm.DTC>): com.google.gson.JsonArray {
                         val arr = com.google.gson.JsonArray()
                         for (dtc in dtcs) {
-                            val obj = JsonObject().apply {
+                            arr.add(JsonObject().apply {
                                 addProperty("code", dtc.code)
-                                addProperty("status", dtc.status)
-                            }
-                            arr.add(obj)
+                                addProperty("description", dtc.status)  // matches Windows format key
+                            })
                         }
-                        add("dtcs", arr)
+                        return arr
+                    }
+
+                    val result = JsonObject().apply {
+                        add("stored", dtcArray(stored))
+                        add("pending", dtcArray(pending))
+                        add("permanent", dtcArray(permanent))
                     }
                     TunnelResponse(200, result)
                 }
 
-                path == "/clear-dtcs" -> {
+                cleanPath == "/clear-dtcs" -> {
                     val ok = protocol.clearDtcs()
-                    val result = JsonObject().apply { addProperty("cleared", ok) }
+                    val result = JsonObject().apply { addProperty("status", if (ok) "cleared" else "failed") }
                     TunnelResponse(200, result)
                 }
 
-                path == "/modules" -> {
+                cleanPath == "/modules" -> {
                     val vin = protocol.readVin()
                     val modules = protocol.discoverModules(vin)
                     val result = JsonObject()
@@ -350,7 +361,7 @@ class GatewayTunnel(
                     TunnelResponse(200, result)
                 }
 
-                path == "/read-did" -> {
+                cleanPath == "/read-did" -> {
                     val moduleAddr = body?.get("module_addr")?.asString?.removePrefix("0x")
                         ?.toIntOrNull(16) ?: return TunnelResponse(400, errorJson("Missing module_addr"))
                     val didsStr = body.get("dids")?.asString ?: return TunnelResponse(400, errorJson("Missing dids"))
@@ -379,24 +390,49 @@ class GatewayTunnel(
                     TunnelResponse(200, response)
                 }
 
-                path == "/pids" -> {
+                cleanPath == "/pids" -> {
                     val pidsStr = body?.get("pids")?.asString ?: return TunnelResponse(400, errorJson("Missing pids"))
                     val pidNames = pidsStr.split(",").map { it.trim() }
                     val values = protocol.readPids(pidNames)
 
-                    val result = JsonObject()
+                    val pidsObj = JsonObject()
                     for ((name, value) in values) {
                         val def = PIDRegistry.resolve(name)
                         val obj = JsonObject().apply {
                             addProperty("value", value)
                             addProperty("unit", def?.unit ?: "")
                         }
-                        result.add(name, obj)
+                        pidsObj.add(name, obj)
+                    }
+                    // Wrap in "pids" key to match Windows gateway format
+                    val result = JsonObject().apply { add("pids", pidsObj) }
+                    TunnelResponse(200, result)
+                }
+
+                cleanPath == "/supported_pids" -> {
+                    val supported = protocol.getSupportedPids()
+                    val arr = com.google.gson.JsonArray()
+                    for (pid in supported.sorted()) {
+                        arr.add(pid)
+                    }
+                    val result = JsonObject().apply {
+                        add("supported_pids", arr)
+                        addProperty("count", supported.size)
                     }
                     TunnelResponse(200, result)
                 }
 
-                path == "/uds-raw" -> {
+                cleanPath == "/fuel_trims" -> {
+                    val pidsToRead = listOf("STFT_B1", "LTFT_B1", "STFT_B2", "LTFT_B2")
+                    val values = protocol.readPids(pidsToRead)
+                    val result = JsonObject()
+                    for ((name, value) in values) {
+                        result.addProperty(name, value)
+                    }
+                    TunnelResponse(200, result)
+                }
+
+                cleanPath == "/uds-raw" -> {
                     val moduleAddr = body?.get("module_addr")?.asString?.removePrefix("0x")
                         ?.toIntOrNull(16) ?: return TunnelResponse(400, errorJson("Missing module_addr"))
                     val command = body.get("command")?.asString ?: return TunnelResponse(400, errorJson("Missing command"))
@@ -410,29 +446,43 @@ class GatewayTunnel(
                     TunnelResponse(200, result)
                 }
 
-                path == "/snapshot" -> {
+                cleanPath == "/snapshot" -> {
                     val snapshot = protocol.captureSnapshot()
                     val result = JsonObject().apply {
                         addProperty("vin", snapshot.vin)
-                        val dtcArr = com.google.gson.JsonArray()
-                        for (dtc in snapshot.dtcs) {
-                            val obj = JsonObject().apply {
-                                addProperty("code", dtc.code)
-                                addProperty("status", dtc.status)
+                        addProperty("timestamp", java.time.Instant.now().toString())
+
+                        // Categorized DTCs matching Windows format
+                        fun dtcArr(dtcs: List<net.aurorasentient.autotechgateway.elm.DTC>): com.google.gson.JsonArray {
+                            val arr = com.google.gson.JsonArray()
+                            for (dtc in dtcs) {
+                                arr.add(JsonObject().apply {
+                                    addProperty("code", dtc.code)
+                                    addProperty("description", dtc.status)
+                                })
                             }
-                            dtcArr.add(obj)
+                            return arr
                         }
-                        add("dtcs", dtcArr)
+                        add("stored", dtcArr(snapshot.dtcs.filter { it.status == "stored" }))
+                        add("pending", dtcArr(snapshot.dtcs.filter { it.status == "pending" }))
+                        add("permanent", dtcArr(snapshot.dtcs.filter { it.status == "permanent" }))
+
+                        // PIDs with units matching Windows format
                         val pidObj = JsonObject()
                         for ((name, value) in snapshot.pids) {
-                            pidObj.addProperty(name, value)
+                            val def = PIDRegistry.resolve(name)
+                            val obj = JsonObject().apply {
+                                addProperty("value", value)
+                                addProperty("unit", def?.unit ?: "")
+                            }
+                            pidObj.add(name, obj)
                         }
                         add("pids", pidObj)
                     }
                     TunnelResponse(200, result)
                 }
 
-                path == "/version" -> {
+                cleanPath == "/version" -> {
                     val result = JsonObject().apply {
                         addProperty("version", AutotechApp.VERSION)
                         addProperty("platform", "android")
@@ -441,18 +491,18 @@ class GatewayTunnel(
                     TunnelResponse(200, result)
                 }
 
-                path == "/reset-adapter" -> {
+                cleanPath == "/reset-adapter" -> {
                     connection.sendCommand("ATZ", 10000)
                     delay(2000)
                     connection.sendCommand("ATE0")
                     connection.sendCommand("ATL0")
                     connection.sendCommand("ATS0")
                     connection.sendCommand("ATSP0")
-                    val result = JsonObject().apply { addProperty("reset", true) }
+                    val result = JsonObject().apply { addProperty("status", "reset") }
                     TunnelResponse(200, result)
                 }
 
-                path == "/reconnect-adapter" -> {
+                cleanPath == "/reconnect-adapter" -> {
                     // Force-close and reopen the connection (mirrors server.py v1.2.48+).
                     // Unlike /reset-adapter which sends ATZ through the existing
                     // connection (and can hang if the transport is stuck), this
@@ -466,7 +516,7 @@ class GatewayTunnel(
                     TunnelResponse(200, result)
                 }
 
-                path == "/restart" -> {
+                cleanPath == "/restart" -> {
                     // Remotely restart the gateway service.
                     // On Android, we invoke the restart callback which
                     // disconnects + restarts the foreground service.
@@ -490,7 +540,7 @@ class GatewayTunnel(
 
                 // ── Sniffer (passive CAN bus capture) ──
 
-                path == "/sniff/start" -> {
+                cleanPath == "/sniff/start" -> {
                     if (snifferSession?.running == true) {
                         TunnelResponse(409, errorJson("Sniffer already running"))
                     } else if (!protocol.capabilities.supportsSTMA) {
@@ -554,7 +604,7 @@ class GatewayTunnel(
                     }
                 }
 
-                path == "/sniff/stop" -> {
+                cleanPath == "/sniff/stop" -> {
                     val session = snifferSession
                     if (session == null) {
                         TunnelResponse(400, errorJson("No active sniffer session"))
@@ -614,7 +664,7 @@ class GatewayTunnel(
                     }
                 }
 
-                path == "/sniff/frames" -> {
+                cleanPath == "/sniff/frames" -> {
                     val session = snifferSession
                     if (session == null) {
                         TunnelResponse(400, errorJson("No active sniffer session"))
@@ -663,7 +713,7 @@ class GatewayTunnel(
                     }
                 }
 
-                path == "/sniff/live" -> {
+                cleanPath == "/sniff/live" -> {
                     val session = snifferSession
                     val decoder = broadcastDecoder
                     if (session == null) {
@@ -681,7 +731,7 @@ class GatewayTunnel(
                     }
                 }
 
-                path == "/sniff/label" -> {
+                cleanPath == "/sniff/label" -> {
                     val session = snifferSession
                     if (session == null) {
                         TunnelResponse(400, errorJson("No active sniffer session"))

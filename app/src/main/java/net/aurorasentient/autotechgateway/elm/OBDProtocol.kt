@@ -730,7 +730,7 @@ class OBDProtocol(private val connection: ElmConnection) {
         return dtcs
     }
 
-    private suspend fun readDtcsMode(mode: String, status: String): List<DTC> {
+    suspend fun readDtcsMode(mode: String, status: String): List<DTC> {
         val resp = connection.sendCommand(mode)
         if (!isLiveResponse(resp)) return emptyList()
         return parseDtcs(resp, status)
@@ -748,24 +748,39 @@ class OBDProtocol(private val connection: ElmConnection) {
 
     /**
      * Read VIN (Mode 09 PID 02).
+     *
+     * Resets the adapter to clean OBD-II broadcast state first,
+     * because prior UDS/DID commands may have configured specific
+     * CAN headers and receive filters that corrupt Mode 09.
      */
     suspend fun readVin(): String? {
+        // Reset adapter to clean OBD-II broadcast state
+        try {
+            connection.sendCommand("ATSH7DF")   // OBD-II broadcast header
+            connection.sendCommand("ATCRA")     // Clear receive filter
+            connection.sendCommand("ATH0")      // Headers off
+        } catch (_: Exception) {
+            // Best effort — proceed with VIN request regardless
+        }
+
         val resp = connection.sendCommand("0902", timeoutMs = 10000)
         if (!isLiveResponse(resp)) return null
 
-        // Parse multiframe response
-        val allBytes = parseMultiframeResponse(resp)
-        if (allBytes.isEmpty()) return null
+        // Parse multiframe response — strips 4902XX header from first frame
+        val data = parseMultiframeResponse(resp)
+        if (data.size < 17) return null
 
-        // VIN is 17 ASCII characters, skip first byte (PID count/padding)
-        val vinBytes = if (allBytes.size > 17) allBytes.drop(1) else allBytes
+        // First byte after header strip is message count (01), skip it.
+        // Then take exactly 17 VIN characters.
+        val vinBytes = if (data.size > 17) data.subList(1, 18) else data.take(17)
         val vin = vinBytes
             .filter { it in 0x20..0x7E }
             .map { it.toChar() }
             .joinToString("")
             .trim()
 
-        return if (vin.length >= 17) vin.take(17) else null
+        Log.d(TAG, "VIN parsed: '$vin' (${vin.length} chars) from ${data.size} bytes")
+        return if (vin.length == 17) vin else null
     }
 
     // ── UDS: Read DID ─────────────────────────────────────────────
@@ -1321,21 +1336,60 @@ class OBDProtocol(private val connection: ElmConnection) {
         return dataHex.chunked(2).mapNotNull { it.toIntOrNull(16) }
     }
 
+    /**
+     * Parse a multi-frame OBD-II response (e.g. VIN, calibration ID).
+     *
+     * Handles all ELM327 response formats:
+     * - CAN ISO-TP indexed:  "0:490201314734\n1:48503537323536"
+     * - CAN reassembled:     "4902013147344850353732353655313434343334"
+     * - Multi-segment Mode 09: "490201314734485035\n490202373235365531"
+     * - With "SEARCHING..." prefix (silently ignored)
+     *
+     * Strips the Mode 09 response header (49 02 XX) from the first
+     * data frame so the caller gets pure payload bytes.
+     */
     private fun parseMultiframeResponse(resp: String): List<Int> {
-        val lines = resp.lines().map { it.trim() }.filter { it.isNotEmpty() }
         val allBytes = mutableListOf<Int>()
+        var isFirstFrame = true
 
-        for (line in lines) {
-            val clean = line.replace(" ", "").uppercase()
-            // Skip frame index prefix (0:, 1:, 2:, etc.)
-            val data = if (clean.length > 2 && clean[1] == ':') {
-                clean.substring(2)
-            } else {
-                // Skip possible CAN header (3 chars) + response header
-                clean.dropWhile { !it.isDigit() || it == '0' }
+        for (rawLine in resp.lines()) {
+            var line = rawLine.trim()
+            if (line.isEmpty()) continue
+
+            // Strip CAN ISO-TP frame index prefix: "0:", "1:", ... "0A:", etc.
+            if (line.length > 2 && line[1] == ':' && line[0].isDigit()) {
+                line = line.substring(2)
+            } else if (line.length > 3 && line[2] == ':' &&
+                       line[0].isLetterOrDigit() && line[1].isLetterOrDigit()) {
+                line = line.substring(3)
             }
-            val bytes = data.chunked(2).mapNotNull { it.toIntOrNull(16) }
-            allBytes.addAll(bytes)
+
+            // Keep only hex characters (strips spaces, "SEARCHING...", etc.)
+            val hexStr = line.filter { it in '0'..'9' || it in 'A'..'F' || it in 'a'..'f' }
+                .uppercase()
+            if (hexStr.isEmpty()) continue
+
+            // On the first actual data frame, strip Mode 09 response header
+            var data = hexStr
+            if (isFirstFrame) {
+                if (data.startsWith("4902") || data.startsWith("4904")) {
+                    data = data.drop(6)  // Strip "4902XX" or "4904XX"
+                }
+                isFirstFrame = false
+            } else {
+                // Subsequent frames: strip per-segment Mode 09 header if present
+                // (e.g. "490202..." on second segment)
+                if (data.startsWith("4902") || data.startsWith("4904")) {
+                    data = data.drop(6)
+                }
+            }
+
+            // Convert hex pairs to byte values
+            for (i in data.indices step 2) {
+                if (i + 1 < data.length) {
+                    data.substring(i, i + 2).toIntOrNull(16)?.let { allBytes.add(it) }
+                }
+            }
         }
         return allBytes
     }

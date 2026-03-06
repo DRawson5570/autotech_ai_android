@@ -388,7 +388,21 @@ class GatewayTunnel(
                         val obj = JsonObject().apply {
                             addProperty("name", mod.name)
                             addProperty("address", "0x${mod.address.toString(16).uppercase()}")
+                            addProperty("response_addr", "0x${mod.responseAddress.toString(16).uppercase()}")
                             addProperty("bus", mod.bus)
+                            addProperty("description", when(mod.bus) {
+                                "MS-CAN" -> "Ford MS-CAN module"
+                                "SW-CAN" -> "GM SW-CAN/GMLAN module"
+                                else -> "UDS (Unified Diagnostic Services) module"
+                            })
+                        }
+                        // Include DID data if available
+                        if (mod.dids.isNotEmpty()) {
+                            val didObj = JsonObject()
+                            for ((k, v) in mod.dids) {
+                                didObj.addProperty(k, v)
+                            }
+                            obj.add("module_info", didObj)
                         }
                         arr.add(obj)
                     }

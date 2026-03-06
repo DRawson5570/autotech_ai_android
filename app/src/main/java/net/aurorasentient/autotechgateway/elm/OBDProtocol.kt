@@ -238,10 +238,24 @@ val GM_SW_CAN_ADDRESSES = mapOf(
 
 /** Ford-specific WMI prefixes for MS-CAN detection */
 val FORD_WMI_PREFIXES = setOf(
+    // Ford USA
     "1FA", "1FB", "1FC", "1FD", "1FM", "1FT", "1FV", "1FW",
+    // Ford Canada
     "2FA", "2FB", "2FC", "2FD", "2FM", "2FT",
+    // Ford Mexico
     "3FA", "3FB", "3FC", "3FD", "3FM", "3FT",
-    "MAJ", "NM0", "WF0",
+    // Ford Turkey (Transit)
+    "NM0",
+    // Ford Europe
+    "WF0", "WFD",
+    // Ford Australia
+    "6FP",
+    // Lincoln
+    "1LN", "2LN", "3LN", "5LM",
+    // Mercury (discontinued but still on road)
+    "1ME", "2ME", "4M2",
+    // Ford Malaysia
+    "MAJ",
 )
 
 /** GM WMI prefixes for SW-CAN/GMLAN detection (Buick, Cadillac, Chevrolet, GMC, etc.) */

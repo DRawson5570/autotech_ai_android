@@ -1411,27 +1411,69 @@ class OBDProtocol(private val connection: ElmConnection) {
     }
 
     private fun parseDtcs(resp: String, status: String): List<DTC> {
-        val hex = resp.replace(" ", "").replace("\n", "").replace("\r", "").uppercase()
         val dtcs = mutableListOf<DTC>()
+        if (resp.isBlank() || "NO DATA" in resp.uppercase() || "ERROR" in resp.uppercase()) {
+            return dtcs
+        }
 
-        // Skip response header (43/47/4A + count byte)
-        var data = hex
-        for (prefix in listOf("43", "47", "4A")) {
-            if (data.startsWith(prefix)) {
-                data = data.drop(2)
-                // Skip count byte if present and data is still sufficient
-                if (data.length >= 2) {
-                    val count = data.take(2).toIntOrNull(16) ?: 0
-                    if (count in 1..20) data = data.drop(2)
+        val expectedSid = when (status) {
+            "stored" -> "43"
+            "pending" -> "47"
+            "permanent" -> "4A"
+            else -> "43"
+        }
+
+        // Process line-by-line to correctly handle multi-frame ISO-TP responses.
+        // The adapter may return frame indices (e.g., "0: 47 06 00 A0\r1: 20 22...")
+        // or CAN headers (e.g., "7E8 06 43 01 ..."). We must strip these framing
+        // artifacts BEFORE joining lines, otherwise colons and header bytes
+        // contaminate the DTC hex data (producing codes like "P31:1", "C21:0").
+        val hex = resp
+            .replace("\r\n", "\n").replace("\r", "\n")  // normalize line endings
+            .split("\n")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it != ">" }
+            .joinToString("") { line ->
+                var clean = line.replace(" ", "").uppercase()
+                // Strip CAN response header (3-char hex like 7E8-7EF)
+                var hadCanHeader = false
+                if (clean.length >= 3) {
+                    val hdr = clean.take(3).toIntOrNull(16)
+                    if (hdr != null && hdr in 0x7E8..0x7EF) {
+                        clean = clean.substring(3)
+                        hadCanHeader = true
+                    }
                 }
-                break
+                // Strip ISO-TP frame index prefix (e.g. "0:", "1:", "A:")
+                if (clean.length >= 2 && clean[1] == ':') {
+                    clean[0].digitToIntOrNull(16)?.let { clean = clean.substring(2) }
+                }
+                // Strip CAN single-frame length byte (01-07) only after a CAN header
+                if (hadCanHeader && clean.length >= 2) {
+                    val lenByte = clean.take(2).toIntOrNull(16)
+                    if (lenByte != null && lenByte in 1..7) clean = clean.substring(2)
+                }
+                clean
+            }
+
+        // Strip ">" prompt if appended to last chunk
+        var data = hex.replace(">", "")
+
+        // Skip response SID (43/47/4A) + DTC count byte
+        if (data.startsWith(expectedSid)) {
+            data = data.drop(2)
+            if (data.length >= 2) {
+                val count = data.take(2).toIntOrNull(16) ?: 0
+                if (count in 1..20) data = data.drop(2)
             }
         }
 
-        // Each DTC is 4 hex chars
-        val dtcChars = data.chunked(4).filter { it.length == 4 }
-        for (dtcHex in dtcChars) {
+        // Each DTC is 4 hex chars (2 bytes)
+        val dtcChunks = data.chunked(4).filter { it.length == 4 }
+        for (dtcHex in dtcChunks) {
             if (dtcHex == "0000") continue  // Padding
+            // Validate all characters are hex digits
+            if (!dtcHex.all { it in "0123456789ABCDEF" }) continue
 
             val firstNibble = dtcHex[0].digitToIntOrNull(16) ?: continue
             val prefix = when (firstNibble shr 2) {
@@ -1444,7 +1486,8 @@ class OBDProtocol(private val connection: ElmConnection) {
             val secondChar = (firstNibble and 0x03).toString()
             val code = "$prefix$secondChar${dtcHex.substring(1)}"
 
-            if (code != "P0000") {
+            // Skip padding and phantom DTCs (adapter echo artifacts)
+            if (code != "P0000" && dtcHex != "00${expectedSid}") {
                 dtcs.add(DTC(code, status))
             }
         }

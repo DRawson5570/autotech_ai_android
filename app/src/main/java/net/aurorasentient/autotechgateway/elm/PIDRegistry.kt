@@ -172,7 +172,8 @@ object PIDRegistry {
         })
 
         register(PIDDefinition(0x42, "CTRL_VOLTAGE", "Control module voltage", "V", PIDCategory.ENGINE, 2,
-            listOf("MODULE_VOLTAGE", "ECU_VOLTAGE", "BATTERY_VOLTAGE")) { d -> ((d[0] * 256) + d[1]) / 1000.0 })
+            listOf("VOLTAGE", "CONTROL_MODULE_VOLTAGE", "MODULE_VOLTAGE", "ECU_VOLTAGE", "BATTERY_VOLTAGE",
+                "CTRL_MOD_VOLTAGE")) { d -> ((d[0] * 256) + d[1]) / 1000.0 })
 
         register(PIDDefinition(0x43, "ABS_LOAD", "Absolute load value", "%", PIDCategory.ENGINE, 2,
             listOf("ABSOLUTE_LOAD")) { d -> ((d[0] * 256) + d[1]) * 100.0 / 255.0 })

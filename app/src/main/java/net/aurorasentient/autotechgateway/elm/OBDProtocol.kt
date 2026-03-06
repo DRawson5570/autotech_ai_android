@@ -1595,8 +1595,9 @@ class OBDProtocol(private val connection: ElmConnection) {
         val addrUpper = respAddrHex.uppercase()
         val headerLen = addrUpper.length
 
-        // Split into lines; strip whitespace, CAN header from each
-        val stripped = rawResp.trim().split('\n').mapNotNull { rawLine ->
+        // Split into lines; strip whitespace, CAN header from each.
+        // Use .lines() instead of split('\n') — ELM327 uses \r as line separator.
+        val stripped = rawResp.trim().lines().mapNotNull { rawLine ->
             var line = rawLine.trim().replace(" ", "").uppercase()
             if (line.isEmpty() || line == ">" || "NODATA" in line || "ERROR" in line) {
                 null

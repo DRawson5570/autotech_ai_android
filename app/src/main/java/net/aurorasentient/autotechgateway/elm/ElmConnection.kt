@@ -268,7 +268,9 @@ sealed class ElmConnection {
             }
         }
 
-        return cleaned
+        // Always normalize line separators to \n — ELM327 uses \r,
+        // but downstream code (reassembleIsoTp, etc.) splits on \n.
+        return lines.joinToString("\n")
     }
 }
 

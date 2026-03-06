@@ -180,7 +180,11 @@ class GatewayTunnel(
                     val id = msg.get("id")?.asString ?: return
                     val method = msg.get("method")?.asString ?: "GET"
                     val path = msg.get("path")?.asString ?: "/"
-                    val body = msg.get("body")?.asJsonObject
+                    // body can be JSON null — Gson returns JsonNull (not Kotlin null),
+                    // so ?.asJsonObject would throw. Only extract if actually an object.
+                    val body = msg.get("body")?.let {
+                        if (it.isJsonObject) it.asJsonObject else null
+                    }
                     val deadline = msg.get("deadline")?.asDouble ?: 0.0
 
                     Log.d(TAG, "← Request $id: $method $path")

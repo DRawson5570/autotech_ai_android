@@ -112,15 +112,16 @@ class GatewayService : Service() {
             updateState(GatewayState.CONNECTED, adapterName = conn.adapterName, adapterVersion = conn.adapterVersion)
             updateNotification("Connected: ${conn.adapterName}")
 
-            // Read VIN
-            val vin = proto.readVin()
-            val vinInfo = vin?.let { VINDecoder.decode(it) }
-
-            // Get supported PIDs
+            // Get supported PIDs FIRST — triggers protocol auto-detection.
+            // VIN (Mode 09) is multi-frame and fails if sent before protocol is established.
             val supported = proto.getSupportedPids()
 
             // Read battery voltage
             val voltage = proto.readBatteryVoltage()
+
+            // Now read VIN — protocol is negotiated, multi-frame will work
+            val vin = proto.readVin()
+            val vinInfo = vin?.let { VINDecoder.decode(it) }
 
             _status.value = _status.value.copy(
                 vin = vin,
@@ -162,10 +163,10 @@ class GatewayService : Service() {
 
             updateState(GatewayState.CONNECTED, adapterName = conn.adapterName)
 
-            val vin = proto.readVin()
-            val vinInfo = vin?.let { VINDecoder.decode(it) }
             val supported = proto.getSupportedPids()
             val voltage = proto.readBatteryVoltage()
+            val vin = proto.readVin()
+            val vinInfo = vin?.let { VINDecoder.decode(it) }
 
             _status.value = _status.value.copy(
                 vin = vin,

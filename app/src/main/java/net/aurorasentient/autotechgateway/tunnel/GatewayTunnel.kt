@@ -308,6 +308,16 @@ class GatewayTunnel(
     private suspend fun handleRequest(method: String, path: String, body: JsonObject?): TunnelResponse {
         // Strip query parameters — the server proxy may append ?user_id=... etc.
         val cleanPath = path.substringBefore("?")
+
+        // Pause scope for OBD requests so we can use the adapter
+        val needsAdapter = cleanPath !in listOf("/", "/status", "/check-update", "/restart")
+        if (needsAdapter && protocol.isScopeRunning) {
+            Log.i(TAG, "Pausing scope for tunnel request: $cleanPath")
+            protocol.scopePausedForTunnel = true
+            // Wait for current scope command to finish (lock release)
+            delay(300)
+        }
+
         return try {
             when {
                 cleanPath == "/" || cleanPath == "/status" -> {
@@ -819,6 +829,12 @@ class GatewayTunnel(
         } catch (e: Exception) {
             Log.e(TAG, "Error handling $method $path: ${e.message}")
             TunnelResponse(500, errorJson(e.message ?: "Internal error"))
+        } finally {
+            // Resume scope if we paused it
+            if (protocol.scopePausedForTunnel) {
+                protocol.scopePausedForTunnel = false
+                Log.i(TAG, "Resumed scope after tunnel request: $cleanPath")
+            }
         }
     }
 

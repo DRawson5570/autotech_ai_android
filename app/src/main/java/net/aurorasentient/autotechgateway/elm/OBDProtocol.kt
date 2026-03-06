@@ -322,6 +322,10 @@ class OBDProtocol(private val connection: ElmConnection) {
     var isScopeRunning = false
         private set
 
+    /** Set by tunnel to temporarily pause scope so tunnel requests can use the adapter */
+    @Volatile
+    var scopePausedForTunnel = false
+
     // ── Mode 01: Current Data ──────────────────────────────────────
 
     /**
@@ -611,6 +615,12 @@ class OBDProtocol(private val connection: ElmConnection) {
         val pidHex = "%02X".format(def.pid)
 
         while (isScopeRunning) {
+            // Yield to tunnel requests — pause polling while tunnel is using adapter
+            while (scopePausedForTunnel && isScopeRunning) {
+                delay(50)
+            }
+            if (!isScopeRunning) break
+
             val startMs = System.currentTimeMillis()
 
             // STPX: Header, Data, expected Responses, Timeout (ms)
@@ -646,6 +656,12 @@ class OBDProtocol(private val connection: ElmConnection) {
         minIntervalMs: Long
     ) {
         while (isScopeRunning) {
+            // Yield to tunnel requests — pause polling while tunnel is using adapter
+            while (scopePausedForTunnel && isScopeRunning) {
+                delay(50)
+            }
+            if (!isScopeRunning) break
+
             val startMs = System.currentTimeMillis()
 
             val value = readPid(def.pid)

@@ -14,6 +14,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import net.aurorasentient.autotechgateway.auth.AuthClient
+import net.aurorasentient.autotechgateway.auth.AuthResult
 import net.aurorasentient.autotechgateway.elm.*
 import net.aurorasentient.autotechgateway.service.GatewayService
 import net.aurorasentient.autotechgateway.service.GatewayState
@@ -30,6 +32,14 @@ private const val TAG = "GatewayVM"
 class GatewayViewModel(application: Application) : AndroidViewModel(application) {
 
     private val settingsRepo = SettingsRepository(application)
+    private val authClient = AuthClient()
+
+    // Auth state
+    private val _authLoading = MutableStateFlow(false)
+    val authLoading: StateFlow<Boolean> = _authLoading
+
+    private val _authError = MutableStateFlow<String?>(null)
+    val authError: StateFlow<String?> = _authError
 
     // Service binding
     private var gatewayService: GatewayService? = null
@@ -507,6 +517,68 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun getAppVersion(): String = autoUpdater.getCurrentVersion()
+
+    // ── Auth ──────────────────────────────────────────────────────
+
+    fun signIn(email: String, password: String) {
+        viewModelScope.launch {
+            _authLoading.value = true
+            _authError.value = null
+
+            when (val result = authClient.signIn(email, password)) {
+                is AuthResult.Success -> {
+                    val r = result.response
+                    settingsRepo.saveAuth(r.token, r.id, r.name, r.email, r.expiresAt)
+                    Log.i(TAG, "Signed in as ${r.name} (${r.email})")
+                }
+                is AuthResult.Error -> {
+                    _authError.value = result.message
+                }
+            }
+
+            _authLoading.value = false
+        }
+    }
+
+    fun signUp(email: String, name: String, password: String) {
+        viewModelScope.launch {
+            _authLoading.value = true
+            _authError.value = null
+
+            when (val result = authClient.signUp(email, name, password)) {
+                is AuthResult.Success -> {
+                    val r = result.response
+                    settingsRepo.saveAuth(r.token, r.id, r.name, r.email, r.expiresAt)
+                    Log.i(TAG, "Signed up as ${r.name} (${r.email})")
+                    _toastMessage.value = "Welcome, ${r.name}!"
+                }
+                is AuthResult.Error -> {
+                    _authError.value = result.message
+                }
+            }
+
+            _authLoading.value = false
+        }
+    }
+
+    fun signOut() {
+        viewModelScope.launch {
+            // Disconnect adapter if connected
+            gatewayService?.disconnect()
+            _livePids.value = emptyMap()
+            _dtcs.value = emptyList()
+            _modules.value = emptyList()
+
+            // Clear auth
+            settingsRepo.clearAuth()
+            Log.i(TAG, "Signed out")
+            _toastMessage.value = "Signed out"
+        }
+    }
+
+    fun clearAuthError() {
+        _authError.value = null
+    }
 
     // ── Battery Optimization ──────────────────────────────────────
 

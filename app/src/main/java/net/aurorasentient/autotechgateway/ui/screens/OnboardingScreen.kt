@@ -2,6 +2,7 @@ package net.aurorasentient.autotechgateway.ui.screens
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -31,7 +32,7 @@ import net.aurorasentient.autotechgateway.ui.theme.*
  * First-launch onboarding flow.
  * Shows 4 pages: Welcome/Brand → AI Diagnostics → Connect Adapter → Get Started
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun OnboardingScreen(
     onComplete: () -> Unit

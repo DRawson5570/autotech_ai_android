@@ -33,6 +33,7 @@ fun SettingsScreen(
     onUpdateAutoTunnel: (Boolean) -> Unit,
     onCheckForUpdate: () -> Unit,
     onInstallUpdate: () -> Unit,
+    onSignOut: () -> Unit,
     updateInfo: UpdateInfo?,
     updateProgress: Float,
     appVersion: String
@@ -188,6 +189,43 @@ fun SettingsScreen(
                     Icon(Icons.Default.Refresh, contentDescription = null)
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Check for Updates")
+                }
+            }
+        }
+
+        // Account
+        SectionCard("Account", Icons.Default.Person) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        settings.authUserName.ifEmpty { "User" },
+                        color = TextPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        settings.authUserEmail,
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+                OutlinedButton(
+                    onClick = onSignOut,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = StatusRed
+                    )
+                ) {
+                    Icon(
+                        Icons.Default.Logout,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Sign Out")
                 }
             }
         }

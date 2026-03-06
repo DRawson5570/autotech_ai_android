@@ -25,6 +25,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import net.aurorasentient.autotechgateway.elm.ConnectionType
 import net.aurorasentient.autotechgateway.elm.DTC
 import net.aurorasentient.autotechgateway.elm.ECUModule
@@ -121,12 +123,27 @@ fun MainApp(viewModel: GatewayViewModel) {
     val updateProgress by viewModel.updateProgress.collectAsState()
     val showUnsupportedAdapter by viewModel.showUnsupportedAdapterDialog.collectAsState()
     val batteryOptNeeded by viewModel.batteryOptimizationNeeded.collectAsState()
+    val authLoading by viewModel.authLoading.collectAsState()
+    val authError by viewModel.authError.collectAsState()
+
+    // ── Auth gate ─────────────────────────────────────────────────
+    // Must be signed in before anything else
+    if (!settings.isLoggedIn) {
+        AuthScreen(
+            isLoading = authLoading,
+            errorMessage = authError,
+            onSignIn = { email, password -> viewModel.signIn(email, password) },
+            onSignUp = { email, name, password -> viewModel.signUp(email, name, password) },
+            onClearError = { viewModel.clearAuthError() }
+        )
+        return
+    }
 
     // Re-check battery optimization when app resumes (user may have just changed it)
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.checkBatteryOptimization()
             }
         }
@@ -277,6 +294,7 @@ fun MainApp(viewModel: GatewayViewModel) {
                     onUpdateAutoTunnel = { viewModel.updateAutoTunnel(it) },
                     onCheckForUpdate = { viewModel.checkForUpdate() },
                     onInstallUpdate = { viewModel.installUpdate() },
+                    onSignOut = { viewModel.signOut() },
                     updateInfo = updateInfo,
                     updateProgress = updateProgress,
                     appVersion = viewModel.getAppVersion()

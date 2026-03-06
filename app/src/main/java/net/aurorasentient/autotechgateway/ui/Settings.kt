@@ -24,6 +24,12 @@ object SettingsKeys {
     val AUTO_CONNECT = stringPreferencesKey("auto_connect")
     val AUTO_TUNNEL = stringPreferencesKey("auto_tunnel")
     val ONBOARDING_COMPLETE = stringPreferencesKey("onboarding_complete")
+    // Auth
+    val AUTH_TOKEN = stringPreferencesKey("auth_token")
+    val AUTH_USER_ID = stringPreferencesKey("auth_user_id")
+    val AUTH_USER_NAME = stringPreferencesKey("auth_user_name")
+    val AUTH_USER_EMAIL = stringPreferencesKey("auth_user_email")
+    val AUTH_EXPIRES_AT = stringPreferencesKey("auth_expires_at")
 }
 
 data class AppSettings(
@@ -36,8 +42,16 @@ data class AppSettings(
     val wifiPort: String = "35000",
     val autoConnect: Boolean = false,
     val autoTunnel: Boolean = false,
-    val onboardingComplete: Boolean = false
-)
+    val onboardingComplete: Boolean = false,
+    // Auth
+    val authToken: String = "",
+    val authUserId: String = "",
+    val authUserName: String = "",
+    val authUserEmail: String = "",
+    val authExpiresAt: Long = 0L
+) {
+    val isLoggedIn: Boolean get() = authToken.isNotEmpty()
+}
 
 class SettingsRepository(private val context: Context) {
 
@@ -52,7 +66,12 @@ class SettingsRepository(private val context: Context) {
             wifiPort = prefs[SettingsKeys.WIFI_PORT] ?: "35000",
             autoConnect = prefs[SettingsKeys.AUTO_CONNECT] == "true",
             autoTunnel = prefs[SettingsKeys.AUTO_TUNNEL] == "true",
-            onboardingComplete = prefs[SettingsKeys.ONBOARDING_COMPLETE] == "true"
+            onboardingComplete = prefs[SettingsKeys.ONBOARDING_COMPLETE] == "true",
+            authToken = prefs[SettingsKeys.AUTH_TOKEN] ?: "",
+            authUserId = prefs[SettingsKeys.AUTH_USER_ID] ?: "",
+            authUserName = prefs[SettingsKeys.AUTH_USER_NAME] ?: "",
+            authUserEmail = prefs[SettingsKeys.AUTH_USER_EMAIL] ?: "",
+            authExpiresAt = (prefs[SettingsKeys.AUTH_EXPIRES_AT] ?: "0").toLongOrNull() ?: 0L
         )
     }
 
@@ -100,5 +119,25 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun completeOnboarding() {
         context.dataStore.edit { it[SettingsKeys.ONBOARDING_COMPLETE] = "true" }
+    }
+
+    suspend fun saveAuth(token: String, userId: String, userName: String, email: String, expiresAt: Long) {
+        context.dataStore.edit {
+            it[SettingsKeys.AUTH_TOKEN] = token
+            it[SettingsKeys.AUTH_USER_ID] = userId
+            it[SettingsKeys.AUTH_USER_NAME] = userName
+            it[SettingsKeys.AUTH_USER_EMAIL] = email
+            it[SettingsKeys.AUTH_EXPIRES_AT] = expiresAt.toString()
+        }
+    }
+
+    suspend fun clearAuth() {
+        context.dataStore.edit {
+            it.remove(SettingsKeys.AUTH_TOKEN)
+            it.remove(SettingsKeys.AUTH_USER_ID)
+            it.remove(SettingsKeys.AUTH_USER_NAME)
+            it.remove(SettingsKeys.AUTH_USER_EMAIL)
+            it.remove(SettingsKeys.AUTH_EXPIRES_AT)
+        }
     }
 }

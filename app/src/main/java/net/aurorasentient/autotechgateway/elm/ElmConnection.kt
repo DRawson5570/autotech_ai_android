@@ -209,6 +209,7 @@ sealed class ElmConnection {
     /**
      * Run the standard AT initialization sequence.
      * ATZ → ATE0 → ATL0 → ATS0 → ATSP0
+     * Then attempt STN-specific commands for OBDLink adapters.
      */
     protected suspend fun initializeAdapter() {
         // Reset
@@ -226,6 +227,19 @@ sealed class ElmConnection {
         sendCommandInternal("ATS0", DEFAULT_TIMEOUT_MS)
         // Auto-detect protocol
         sendCommandInternal("ATSP0", DEFAULT_TIMEOUT_MS)
+
+        // STN-specific: Disable Bluetooth low-power sleep.
+        // OBDLink MX+ (STN2120) enters BT sleep after ~2 min of inactivity,
+        // which drops the RFCOMM socket on Android. STSLCS disables the
+        // sleep countdown. Cheap ELM327 clones will return "?" — harmless.
+        try {
+            val stnResp = sendCommandInternal("STSLCS", DEFAULT_TIMEOUT_MS)
+            if (!stnResp.contains("?")) {
+                Log.i(TAG, "STN sleep timer disabled (STSLCS)")
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "STSLCS not supported (non-STN adapter): ${e.message}")
+        }
 
         Log.i(TAG, "Adapter initialized: $adapterName v$adapterVersion")
     }

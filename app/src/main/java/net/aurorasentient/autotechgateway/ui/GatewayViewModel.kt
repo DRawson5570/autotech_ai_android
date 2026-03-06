@@ -5,7 +5,10 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.net.Uri
 import android.os.IBinder
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -63,6 +66,10 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
     private val scopeSamples = mutableListOf<ScopeSample>()
     private var sampleCount = 0
     private var sampleStartTime = 0L
+
+    // Unsupported adapter dialog
+    private val _showUnsupportedAdapterDialog = MutableStateFlow(false)
+    val showUnsupportedAdapterDialog: StateFlow<Boolean> = _showUnsupportedAdapterDialog
 
     // Auto-updater
     private val autoUpdater = AutoUpdater(application)
@@ -205,6 +212,9 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
 
                 // Detect STN/OBDLink capabilities
                 detectAdapterCapabilities()
+
+                // Request battery optimization exemption for reliable BT keepalive
+                requestBatteryOptimizationExemption()
 
                 // Auto-start tunnel if configured
                 if (settings.value.autoTunnel && settings.value.shopId.isNotEmpty()) {
@@ -360,6 +370,10 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { settingsRepo.updateAutoTunnel(enabled) }
     }
 
+    fun completeOnboarding() {
+        viewModelScope.launch { settingsRepo.completeOnboarding() }
+    }
+
     // ── Scope ─────────────────────────────────────────────────
 
     fun selectScopePid(pidName: String) {
@@ -425,6 +439,8 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
 
     /**
      * Detect adapter capabilities (STN/OBDLink) after connecting.
+     * If the adapter is not STN-based, disconnect and show the
+     * unsupported-adapter dialog — cheap clones are not supported.
      */
     fun detectAdapterCapabilities() {
         viewModelScope.launch {
@@ -434,12 +450,21 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
                     _scopeState.value = _scopeState.value.copy(capabilities = caps)
                     if (caps.isSTN) {
                         _toastMessage.value = "${caps.deviceName} detected — high-speed mode enabled"
+                    } else {
+                        // Not an STN/OBDLink adapter — disconnect and block
+                        Log.w(TAG, "Unsupported adapter detected: ${caps.deviceName}")
+                        disconnect()
+                        _showUnsupportedAdapterDialog.value = true
                     }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Adapter detection failed: ${e.message}")
             }
         }
+    }
+
+    fun dismissUnsupportedAdapterDialog() {
+        _showUnsupportedAdapterDialog.value = false
     }
 
     // ── Auto-Update ───────────────────────────────────────────
@@ -478,4 +503,29 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun getAppVersion(): String = autoUpdater.getCurrentVersion()
+
+    // ── Battery Optimization ──────────────────────────────────────
+
+    /**
+     * Request exemption from Android battery optimization (Doze).
+     * Without this, the OS can suspend BT and delay AlarmManager alarms,
+     * causing the adapter connection to drop during idle periods.
+     * Only prompts once — Android remembers the exemption.
+     */
+    private fun requestBatteryOptimizationExemption() {
+        try {
+            val ctx = getApplication<Application>()
+            val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(ctx.packageName)) {
+                Log.i(TAG, "Requesting battery optimization exemption")
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:${ctx.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                ctx.startActivity(intent)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not request battery optimization exemption: ${e.message}")
+        }
+    }
 }

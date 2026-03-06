@@ -23,6 +23,7 @@ object SettingsKeys {
     val WIFI_PORT = stringPreferencesKey("wifi_port")
     val AUTO_CONNECT = stringPreferencesKey("auto_connect")
     val AUTO_TUNNEL = stringPreferencesKey("auto_tunnel")
+    val ONBOARDING_COMPLETE = stringPreferencesKey("onboarding_complete")
 }
 
 data class AppSettings(
@@ -34,7 +35,8 @@ data class AppSettings(
     val wifiHost: String = "192.168.0.10",
     val wifiPort: String = "35000",
     val autoConnect: Boolean = false,
-    val autoTunnel: Boolean = false
+    val autoTunnel: Boolean = false,
+    val onboardingComplete: Boolean = false
 )
 
 class SettingsRepository(private val context: Context) {
@@ -49,7 +51,8 @@ class SettingsRepository(private val context: Context) {
             wifiHost = prefs[SettingsKeys.WIFI_HOST] ?: "192.168.0.10",
             wifiPort = prefs[SettingsKeys.WIFI_PORT] ?: "35000",
             autoConnect = prefs[SettingsKeys.AUTO_CONNECT] == "true",
-            autoTunnel = prefs[SettingsKeys.AUTO_TUNNEL] == "true"
+            autoTunnel = prefs[SettingsKeys.AUTO_TUNNEL] == "true",
+            onboardingComplete = prefs[SettingsKeys.ONBOARDING_COMPLETE] == "true"
         )
     }
 
@@ -93,5 +96,9 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun updateAutoTunnel(enabled: Boolean) {
         context.dataStore.edit { it[SettingsKeys.AUTO_TUNNEL] = enabled.toString() }
+    }
+
+    suspend fun completeOnboarding() {
+        context.dataStore.edit { it[SettingsKeys.ONBOARDING_COMPLETE] = "true" }
     }
 }

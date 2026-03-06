@@ -31,6 +31,7 @@ private const val TAG = "GatewayService"
 private const val NOTIFICATION_ID = 1
 private const val KEEPALIVE_INTERVAL_MS = 25000L
 private const val IDLE_THRESHOLD_MS = 15000L
+private const val MAX_RECONNECT_ATTEMPTS = 3
 
 enum class GatewayState {
     DISCONNECTED,
@@ -74,6 +75,7 @@ class GatewayService : Service() {
         private set
     private var tunnel: GatewayTunnel? = null
     private var keepaliveJob: Job? = null
+    private var reconnectAttempts = 0
 
     override fun onBind(intent: Intent?): IBinder = binder
 
@@ -84,6 +86,7 @@ class GatewayService : Service() {
     }
 
     override fun onDestroy() {
+        keepaliveJob?.cancel()
         serviceScope.launch {
             disconnect()
         }
@@ -318,14 +321,57 @@ class GatewayService : Service() {
 
     // ── Internal ──────────────────────────────────────────────────
 
+    /**
+     * Start the keepalive loop.
+     *
+     * Sends ATRV (battery voltage) every 25s when idle to prevent the
+     * MX+ from entering BT sleep. If the connection drops, attempts
+     * reconnect via forceReconnect() up to MAX_RECONNECT_ATTEMPTS times.
+     *
+     * Relies on PARTIAL_WAKE_LOCK + battery optimization exemption to
+     * keep the CPU running and coroutine delays firing on time in Doze.
+     */
     private fun startKeepalive() {
         keepaliveJob?.cancel()
+        reconnectAttempts = 0
         keepaliveJob = serviceScope.launch(Dispatchers.IO) {
+            Log.i(TAG, "Keepalive started (${KEEPALIVE_INTERVAL_MS}ms interval)")
             while (isActive) {
                 delay(KEEPALIVE_INTERVAL_MS)
                 val conn = connection ?: break
-                if (!conn.isConnected) break
 
+                // Connection lost — attempt reconnect
+                if (!conn.isConnected) {
+                    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                        reconnectAttempts++
+                        Log.w(TAG, "Keepalive: connection lost, reconnect attempt $reconnectAttempts/$MAX_RECONNECT_ATTEMPTS")
+                        try {
+                            conn.forceReconnect()
+                            reconnectAttempts = 0
+                            Log.i(TAG, "Keepalive: reconnect successful")
+                            updateNotification("Reconnected | ${_status.value.vin ?: conn.adapterName}")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Keepalive: reconnect failed: ${e.message}")
+                            CrashReporter.reportNonFatal(e, mapOf(
+                                "context" to "keepalive_reconnect",
+                                "attempt" to reconnectAttempts.toString()
+                            ))
+                            if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+                                Log.e(TAG, "Keepalive: max reconnect attempts reached")
+                                updateState(GatewayState.ERROR,
+                                    errorMessage = "Adapter lost — reconnect failed after $MAX_RECONNECT_ATTEMPTS attempts")
+                                updateNotification("Adapter lost — tap to reconnect")
+                                break
+                            }
+                        }
+                    } else {
+                        break
+                    }
+                    continue
+                }
+
+                // Connection alive — send keepalive if idle
+                reconnectAttempts = 0
                 val idle = System.currentTimeMillis() - conn.lastActivity
                 if (idle > IDLE_THRESHOLD_MS) {
                     try {
@@ -334,10 +380,14 @@ class GatewayService : Service() {
                             _status.value = _status.value.copy(batteryVoltage = voltage)
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Keepalive failed: ${e.message}")
+                        Log.w(TAG, "Keepalive command failed: ${e.message}")
+                        // Don't break — ElmConnection's watchdog tracks consecutive
+                        // timeouts and sets needsReconnect after 5 failures.
+                        // We'll catch !isConnected on the next cycle.
                     }
                 }
             }
+            Log.i(TAG, "Keepalive loop ended")
         }
     }
 

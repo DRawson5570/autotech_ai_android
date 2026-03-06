@@ -1,7 +1,9 @@
 package net.aurorasentient.autotechgateway
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
@@ -14,9 +16,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import net.aurorasentient.autotechgateway.elm.ConnectionType
 import net.aurorasentient.autotechgateway.elm.DTC
@@ -112,7 +119,25 @@ fun MainApp(viewModel: GatewayViewModel) {
     val scopeState by viewModel.scopeState.collectAsState()
     val updateInfo by viewModel.updateInfo.collectAsState()
     val updateProgress by viewModel.updateProgress.collectAsState()
+    val showUnsupportedAdapter by viewModel.showUnsupportedAdapterDialog.collectAsState()
 
+    // Unsupported adapter dialog
+    if (showUnsupportedAdapter) {
+        UnsupportedAdapterDialog(
+            onDismiss = { viewModel.dismissUnsupportedAdapterDialog() },
+            onShopOBDLink = {
+                viewModel.dismissUnsupportedAdapterDialog()
+            }
+        )
+    }
+
+    // Show onboarding on first launch
+    if (!settings.onboardingComplete) {
+        OnboardingScreen(
+            onComplete = { viewModel.completeOnboarding() }
+        )
+        return
+    }
     // Show toasts
     LaunchedEffect(toastMessage) {
         // Toast is handled at the platform level; we show a snackbar instead
@@ -249,4 +274,85 @@ fun MainApp(viewModel: GatewayViewModel) {
             }
         }
     }
+}
+
+// ── Unsupported Adapter Dialog ──────────────────────────────────
+
+private const val OBDLINK_STORE_URL = "https://www.obdlink.com/products/"
+
+@Composable
+fun UnsupportedAdapterDialog(
+    onDismiss: () -> Unit,
+    onShopOBDLink: () -> Unit
+) {
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DarkSurface,
+        titleContentColor = TextPrimary,
+        textContentColor = TextSecondary,
+        icon = {
+            Icon(
+                Icons.Default.Warning,
+                contentDescription = null,
+                tint = StatusYellow,
+                modifier = Modifier.size(40.dp)
+            )
+        },
+        title = {
+            Text(
+                "Unsupported Adapter",
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "This app requires an OBDLink adapter with an STN chip for reliable, " +
+                    "professional-grade diagnostics.",
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+                Text(
+                    "Cheap ELM327 clones lack the advanced protocols needed for " +
+                    "multi-bus scanning, enhanced diagnostics, and stable connections.",
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+                Text(
+                    "Compatible adapters:",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 14.sp,
+                    color = TextPrimary
+                )
+                Column(modifier = Modifier.padding(start = 8.dp)) {
+                    Text("• OBDLink MX+  (Bluetooth)", fontSize = 13.sp)
+                    Text("• OBDLink EX   (USB)", fontSize = 13.sp)
+                    Text("• OBDLink LX   (Bluetooth)", fontSize = 13.sp)
+                    Text("• OBDLink CX   (BLE)", fontSize = 13.sp)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onShopOBDLink()
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(OBDLINK_STORE_URL))
+                    context.startActivity(intent)
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = AutotechBlue)
+            ) {
+                Icon(Icons.Default.ShoppingCart, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Shop OBDLink")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Dismiss", color = TextSecondary)
+            }
+        }
+    )
 }

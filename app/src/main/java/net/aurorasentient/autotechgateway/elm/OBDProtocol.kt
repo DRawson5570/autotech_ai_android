@@ -19,6 +19,8 @@ val ECU_ADDRESSES = mapOf(
     "SRS"  to Pair(0x7E3, 0x7EB),
     "BCM"  to Pair(0x7E4, 0x7EC),
     "HVAC" to Pair(0x7E5, 0x7ED),
+    "ECU6" to Pair(0x7E6, 0x7EE),
+    "ECU7" to Pair(0x7E7, 0x7EF),
 )
 
 /** Ford MS-CAN module addresses (secondary bus, 125 kbps)
@@ -281,7 +283,7 @@ data class ECUModule(
     val address: Int,
     val responseAddress: Int,
     val bus: String,         // "HS-CAN", "MS-CAN", or "SW-CAN"
-    val dids: Map<String, String> = emptyMap()
+    var dids: Map<String, String> = emptyMap()
 )
 
 /** DID reading result */
@@ -761,7 +763,21 @@ class OBDProtocol(private val connection: ElmConnection) {
     }
 
     suspend fun readDtcsMode(mode: String, status: String): List<DTC> {
+        // Enable headers to identify which ECU reported each DTC
+        // (matches Python's _read_dtcs_all_modules behavior)
+        try {
+            connection.sendCommand("ATH1")
+            connection.sendCommand("ATS1")
+        } catch (_: Exception) {}
+
         val resp = connection.sendCommand(mode)
+
+        // Always restore header settings
+        try {
+            connection.sendCommand("ATH0")
+            connection.sendCommand("ATS0")
+        } catch (_: Exception) {}
+
         if (!isLiveResponse(resp)) return emptyList()
         return parseDtcs(resp, status)
     }
@@ -1107,6 +1123,33 @@ class OBDProtocol(private val connection: ElmConnection) {
                 Log.d(TAG, "MS-CAN module found via DiagSessionCtrl: $name @ 0x${addrs.first.toString(16)}")
             }
         }
+
+        // Read UDS DIDs for each discovered MS-CAN module while still on MS-CAN.
+        // (Must do this before switching back — these modules are unreachable on HS-CAN)
+        // Matches Python protocol.py behavior.
+        for (mod in modules) {
+            try {
+                Log.i(TAG, "  Reading DIDs for ${mod.name} (0x${mod.address.toString(16)})...")
+                connection.sendCommand("ATSH%03X".format(mod.address))
+                connection.sendCommand("ATCRA%03X".format(mod.responseAddress))
+                val dids = readModuleDids(
+                    moduleName = mod.name,
+                    manufacturer = "ford",
+                    tryExtendedSession = true
+                )
+                mod.dids = dids
+                if (dids.isNotEmpty()) {
+                    Log.i(TAG, "  ${mod.name}: ${dids.size} DID(s) read")
+                } else {
+                    Log.i(TAG, "  ${mod.name}: no DIDs readable")
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "  ${mod.name} DID read failed: ${e.message}")
+            }
+        }
+
+        // Reset CAN receive filter before bus switch
+        try { connection.sendCommand("ATCRA") } catch (_: Exception) {}
 
         // Switch back to HS-CAN
         connection.sendCommand("STP6")
@@ -1461,72 +1504,86 @@ class OBDProtocol(private val connection: ElmConnection) {
             else -> "43"
         }
 
-        // Process line-by-line to correctly handle multi-frame ISO-TP responses.
-        // The adapter may return frame indices (e.g., "0: 47 06 00 A0\r1: 20 22...")
-        // or CAN headers (e.g., "7E8 06 43 01 ..."). We must strip these framing
-        // artifacts BEFORE joining lines, otherwise colons and header bytes
-        // contaminate the DTC hex data (producing codes like "P31:1", "C21:0").
-        val hex = resp
-            .replace("\r\n", "\n").replace("\r", "\n")  // normalize line endings
+        // ECU name lookup for header bytes (matches Python ecu_names)
+        val ecuNames = mapOf(
+            "7E8" to "PCM", "7E9" to "TCM", "7EA" to "ABS",
+            "7EB" to "BCM", "7EC" to "SRS", "7ED" to "HVAC",
+            "7EE" to "ECU6", "7EF" to "ECU7",
+        )
+
+        // Process line-by-line with CAN header awareness (matches Python _parse_dtcs).
+        // Each CAN response line may have: [CAN_HEADER] [LEN_BYTE] SID DTC_COUNT DTC1 DTC2 ...
+        // Processing per-line preserves ECU attribution and prevents header bytes
+        // from contaminating the DTC hex stream.
+        val lines = resp
+            .replace("\r\n", "\n").replace("\r", "\n")
             .split("\n")
             .map { it.trim() }
             .filter { it.isNotEmpty() && it != ">" }
-            .joinToString("") { line ->
-                var clean = line.replace(" ", "").uppercase()
-                // Strip CAN response header (3-char hex like 7E8-7EF)
-                var hadCanHeader = false
-                if (clean.length >= 3) {
-                    val hdr = clean.take(3).toIntOrNull(16)
-                    if (hdr != null && hdr in 0x7E8..0x7EF) {
-                        clean = clean.substring(3)
-                        hadCanHeader = true
-                    }
+
+        for (line in lines) {
+            val parts = line.split(" ").filter { it.isNotEmpty() }
+            var ecuAddr: String? = null
+            var dataStr = line
+
+            // Check for CAN header (3-char hex addr like 7E8)
+            if (parts.isNotEmpty() && parts[0].length == 3) {
+                val hdr = parts[0].uppercase().toIntOrNull(16)
+                if (hdr != null && hdr in 0x7E0..0x7FF) {
+                    ecuAddr = parts[0].uppercase()
+                    dataStr = parts.drop(1).joinToString(" ")
                 }
-                // Strip ISO-TP frame index prefix (e.g. "0:", "1:", "A:")
-                if (clean.length >= 2 && clean[1] == ':') {
-                    clean[0].digitToIntOrNull(16)?.let { clean = clean.substring(2) }
-                }
-                // Strip CAN single-frame length byte (01-07) only after a CAN header
-                if (hadCanHeader && clean.length >= 2) {
-                    val lenByte = clean.take(2).toIntOrNull(16)
-                    if (lenByte != null && lenByte in 1..7) clean = clean.substring(2)
-                }
-                clean
             }
 
-        // Strip ">" prompt if appended to last chunk
-        var data = hex.replace(">", "")
+            // Remove spaces and normalize
+            var cleaned = dataStr.replace(" ", "").uppercase()
 
-        // Skip response SID (43/47/4A) + DTC count byte
-        if (data.startsWith(expectedSid)) {
-            data = data.drop(2)
-            if (data.length >= 2) {
-                val count = data.take(2).toIntOrNull(16) ?: 0
-                if (count in 1..20) data = data.drop(2)
+            // Strip ISO-TP frame index prefix (e.g. "0:", "1:", "A:")
+            if (cleaned.length >= 2 && cleaned[1] == ':') {
+                cleaned[0].digitToIntOrNull(16)?.let { cleaned = cleaned.substring(2) }
             }
-        }
 
-        // Each DTC is 4 hex chars (2 bytes)
-        val dtcChunks = data.chunked(4).filter { it.length == 4 }
-        for (dtcHex in dtcChunks) {
-            if (dtcHex == "0000") continue  // Padding
-            // Validate all characters are hex digits
-            if (!dtcHex.all { it in "0123456789ABCDEF" }) continue
-
-            val firstNibble = dtcHex[0].digitToIntOrNull(16) ?: continue
-            val prefix = when (firstNibble shr 2) {
-                0 -> "P"
-                1 -> "C"
-                2 -> "B"
-                3 -> "U"
-                else -> "P"
+            // For CAN frames, skip the length byte (first byte after address)
+            // CAN: 7E8 06 43 01 0171 0000 → cleaned="06430101710000"
+            if (ecuAddr != null && cleaned.length >= 2) {
+                val lenByte = cleaned.take(2).toIntOrNull(16)
+                if (lenByte != null && lenByte in 1..7) cleaned = cleaned.substring(2)
             }
-            val secondChar = (firstNibble and 0x03).toString()
-            val code = "$prefix$secondChar${dtcHex.substring(1)}"
 
-            // Skip padding and phantom DTCs (adapter echo artifacts)
-            if (code != "P0000" && dtcHex != "00${expectedSid}") {
-                dtcs.add(DTC(code, status))
+            // Strip the OBD response header (43/47/4A)
+            if (!cleaned.startsWith(expectedSid)) continue  // Not a DTC response line
+            cleaned = cleaned.drop(2)
+
+            // On CAN (ISO 15765-4), first byte after SID is the DTC count — skip it
+            if (ecuAddr != null && cleaned.length >= 2) {
+                val count = cleaned.take(2).toIntOrNull(16)
+                if (count != null && count in 0..20) cleaned = cleaned.drop(2)
+            }
+
+            // Parse DTCs from this line: each DTC is 4 hex chars (2 bytes)
+            val dtcChunks = cleaned.chunked(4).filter { it.length == 4 }
+            for (dtcHex in dtcChunks) {
+                if (dtcHex == "0000") continue  // Padding
+                if (!dtcHex.all { it in "0123456789ABCDEF" }) continue
+
+                // Detect phantom DTC: adapter echoes response header as padding
+                if (dtcHex == "00${expectedSid}") {
+                    Log.d(TAG, "Skipping phantom DTC 00$expectedSid (adapter echo artifact)")
+                    continue
+                }
+
+                val firstNibble = dtcHex[0].digitToIntOrNull(16) ?: continue
+                val prefix = when (firstNibble shr 2) {
+                    0 -> "P"; 1 -> "C"; 2 -> "B"; 3 -> "U"; else -> "P"
+                }
+                val secondChar = (firstNibble and 0x03).toString()
+                val code = "$prefix$secondChar${dtcHex.substring(1)}"
+
+                if (code != "P0000") {
+                    val ecuName = ecuAddr?.let { ecuNames[it] ?: it } ?: ""
+                    val desc = if (ecuName.isNotEmpty()) "[$ecuName]" else ""
+                    dtcs.add(DTC(code, status, desc))
+                }
             }
         }
 
@@ -1552,15 +1609,17 @@ class OBDProtocol(private val connection: ElmConnection) {
 
     private fun isLiveResponse(resp: String): Boolean {
         val upper = resp.uppercase().trim()
+        // Use "in" (contains) matching like Python — error strings can appear
+        // mid-response, not just at the start (e.g. "7E8 06 7F 22 ERROR")
         return upper.isNotEmpty() &&
-            !upper.startsWith("NO DATA") &&
-            !upper.startsWith("ERROR") &&
-            !upper.startsWith("UNABLE") &&
-            !upper.startsWith("CAN ERROR") &&
-            !upper.startsWith("BUS") &&
-            !upper.startsWith("STOPPED") &&
-            !upper.startsWith("?") &&
-            !upper.startsWith("BUFFER FULL")
+            "NO DATA" !in upper &&
+            "ERROR" !in upper &&
+            "UNABLE" !in upper &&
+            "CAN ERROR" !in upper &&
+            "BUS INIT" !in upper &&
+            "STOPPED" !in upper &&
+            "BUFFER FULL" !in upper &&
+            !upper.startsWith("?")
     }
 
     private fun decodeDIDValue(hexData: String): String {
@@ -1568,12 +1627,101 @@ class OBDProtocol(private val connection: ElmConnection) {
 
         // Try ASCII decode if all bytes are printable
         val bytes = hexData.chunked(2).mapNotNull { it.toIntOrNull(16) }
-        val printable = bytes.all { it in 0x20..0x7E }
-        return if (printable && bytes.size > 1) {
-            bytes.map { it.toChar() }.joinToString("").trim()
-        } else {
-            hexData
+        // Strip trailing null bytes
+        val trimmed = bytes.dropLastWhile { it == 0 }
+        if (trimmed.isEmpty()) return hexData
+
+        val printable = trimmed.all { it in 0x20..0x7E }
+        val hasAlpha = trimmed.any { it in 0x30..0x39 || it in 0x41..0x5A || it in 0x61..0x7A }
+
+        if (printable && hasAlpha) {
+            if (trimmed.size >= 4) {
+                return trimmed.map { it.toChar() }.joinToString("").trim()
+            }
+            // Short strings: only trust if mostly alphanumeric
+            val alphaCount = trimmed.count { it in 0x30..0x39 || it in 0x41..0x5A || it in 0x61..0x7A }
+            if (alphaCount > trimmed.size / 2) {
+                return trimmed.map { it.toChar() }.joinToString("").trim()
+            }
         }
+
+        // Binary value
+        if (trimmed.size <= 4) {
+            val intVal = trimmed.fold(0L) { acc, b -> (acc shl 8) or b.toLong() }
+            return "0x${hexData.take(trimmed.size * 2)} ($intVal)"
+        }
+        return hexData.chunked(2).joinToString(" ")
+    }
+
+    /**
+     * Read a list of DIDs and return those that respond positively.
+     * Caller must have already configured ATSH/ATCRA for the target module.
+     * Matches Python's _scan_did_list() behavior.
+     */
+    private suspend fun scanDIDList(didDict: Map<Int, String>): Map<String, String> {
+        val info = mutableMapOf<String, String>()
+        for ((did, label) in didDict) {
+            try {
+                val cmd = "22%04X".format(did)
+                val resp = connection.sendCommand(cmd, timeoutMs = 3000)
+                if (!isLiveResponse(resp)) continue
+
+                val cleaned = resp.replace(" ", "").uppercase()
+                val didHex = "%04X".format(did)
+                val marker = "62$didHex"
+                val idx = cleaned.indexOf(marker)
+                if (idx < 0) continue
+
+                val dataHex = cleaned.substring(idx + marker.length)
+                if (dataHex.isEmpty()) continue
+
+                info[label] = decodeDIDValue(dataHex)
+                Log.d(TAG, "  DID $didHex ($label): ${info[label]}")
+            } catch (e: Exception) {
+                Log.d(TAG, "  DID ${did.toString(16)} read failed: ${e.message}")
+            }
+        }
+        return info
+    }
+
+    /**
+     * Read UDS identification DIDs from an ECU module.
+     *
+     * First tries standard ISO 14229 DIDs (F180-F19F), then falls back to
+     * manufacturer-specific DIDs (Ford DDxx/DExx) if standard ones are empty.
+     * Optionally enters extended diagnostic session first.
+     *
+     * Caller must have already set ATSH and ATCRA for this module,
+     * and be on the correct bus. Matches Python's _read_module_dids().
+     */
+    private suspend fun readModuleDids(
+        moduleName: String,
+        manufacturer: String = "",
+        tryExtendedSession: Boolean = false
+    ): Map<String, String> {
+        // Optionally enter extended session first
+        if (tryExtendedSession) {
+            try {
+                val resp = connection.sendCommand("1003", timeoutMs = 3000)
+                if ("50" in resp) {
+                    Log.d(TAG, "  $moduleName: extended session active")
+                }
+            } catch (_: Exception) {}
+        }
+
+        // Phase A: Standard ISO 14229 identification DIDs
+        var info = scanDIDList(STANDARD_DIDS)
+
+        // Phase B: Manufacturer-specific fallback DIDs
+        if (info.isEmpty() && manufacturer.lowercase() == "ford") {
+            Log.d(TAG, "  $moduleName: standard DIDs empty, trying Ford-specific DIDs...")
+            if (!tryExtendedSession) {
+                try { connection.sendCommand("1003", timeoutMs = 3000) } catch (_: Exception) {}
+            }
+            info = scanDIDList(FORD_IDENTIFICATION_DIDS)
+        }
+
+        return info
     }
 
     /**

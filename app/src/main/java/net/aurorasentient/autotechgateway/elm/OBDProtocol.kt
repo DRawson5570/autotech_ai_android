@@ -975,6 +975,10 @@ class OBDProtocol(private val connection: ElmConnection) {
         // Phase 1: Broadcast 0100 with headers on
         connection.sendCommand("ATH1")
         connection.sendCommand("ATS1")
+        // Extended timeout for slow modules (ATSTFF = 255 × 4ms ≈ 1s)
+        try { connection.sendCommand("ATSTFF") } catch (_: Exception) {
+            try { connection.sendCommand("AT ST FF") } catch (_: Exception) {}
+        }
         val broadcastResp = connection.sendCommand("0100", timeoutMs = 10000)
 
         // Extract responding addresses from header
@@ -997,6 +1001,11 @@ class OBDProtocol(private val connection: ElmConnection) {
             // Try TesterPresent
             var resp = connection.sendCommand("3E00", timeoutMs = 3000)
             if (!isLiveResponse(resp)) {
+                // Try DiagnosticSessionControl
+                resp = connection.sendCommand("1001", timeoutMs = 3000)
+            }
+            if (!isLiveResponse(resp)) {
+                // Try targeted Mode 01 PID 00
                 resp = connection.sendCommand("0100", timeoutMs = 3000)
             }
             if (isLiveResponse(resp)) {
@@ -1073,14 +1082,29 @@ class OBDProtocol(private val connection: ElmConnection) {
         connection.sendCommand("ATH1")
         connection.sendCommand("ATS1")
 
+        // Extended timeout: MS-CAN (125 kbps) modules are slower to respond
+        // ATSTFF = 255 * 4ms ≈ 1020ms — critical for GEM, IPC, ABS, PSCM, RCM etc.
+        try { connection.sendCommand("ATSTFF") } catch (_: Exception) {
+            try { connection.sendCommand("AT ST FF") } catch (_: Exception) {}
+        }
+
         for ((name, addrs) in FORD_MS_CAN_ADDRESSES) {
             connection.sendCommand("ATSH%03X".format(addrs.first))
             connection.sendCommand("ATCRA%03X".format(addrs.second))
 
-            val resp = connection.sendCommand("3E00", timeoutMs = 2000)
+            // Try TesterPresent first
+            var resp = connection.sendCommand("3E00", timeoutMs = 3000)
             if (isLiveResponse(resp)) {
                 modules.add(ECUModule(name, addrs.first, addrs.second, "MS-CAN"))
                 Log.d(TAG, "MS-CAN module found: $name @ 0x${addrs.first.toString(16)}")
+                continue
+            }
+
+            // Fallback: DiagnosticSessionControl (some modules don't support TesterPresent)
+            resp = connection.sendCommand("1001", timeoutMs = 3000)
+            if (isLiveResponse(resp)) {
+                modules.add(ECUModule(name, addrs.first, addrs.second, "MS-CAN"))
+                Log.d(TAG, "MS-CAN module found via DiagSessionCtrl: $name @ 0x${addrs.first.toString(16)}")
             }
         }
 
@@ -1601,6 +1625,15 @@ class OBDProtocol(private val connection: ElmConnection) {
         connection.sendCommand("ATSH%03X".format(moduleAddr))
         connection.sendCommand("ATCRA%03X".format(respAddr))
 
+        // Extended timeout for non-HS-CAN buses (MS-CAN 125kbps, SW-CAN 33.3kbps)
+        // ATSTFF = 255 * 4ms ≈ 1020ms — needed for slow-to-wake modules
+        // (GEM, IPC, ABS, PSCM, RCM etc. often need >200ms on MS-CAN)
+        if (switchedBus) {
+            try { connection.sendCommand("ATSTFF") } catch (_: Exception) {
+                try { connection.sendCommand("AT ST FF") } catch (_: Exception) {}
+            }
+        }
+
         val needFc = switchedBus || !isStandardOdbAddr(moduleAddr)
         if (needFc) {
             // Explicit Flow Control:
@@ -1631,6 +1664,8 @@ class OBDProtocol(private val connection: ElmConnection) {
             try { connection.sendCommand("STP6") } catch (_: Exception) {}
             try { connection.sendCommand("STPC1") } catch (_: Exception) {}
             try { connection.sendCommand("ATSP6") } catch (_: Exception) {}
+            // Restore default timeout (0x32 = 50 * 4ms = 200ms, standard for HS-CAN)
+            try { connection.sendCommand("ATST32") } catch (_: Exception) {}
         }
         try { connection.sendCommand("ATSH7DF") } catch (_: Exception) {}
         try { connection.sendCommand("ATCRA") } catch (_: Exception) {}

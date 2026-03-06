@@ -108,14 +108,24 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    init {
-        bindService()
+    private var serviceStarted = false
 
-        // Start periodic update checks
+    init {
+        // Start periodic update checks (doesn't need BT permissions)
         autoUpdater.startPeriodicChecks(viewModelScope) { info ->
             _updateInfo.value = info
             _toastMessage.value = "Update available: v${info.latestVersion}"
         }
+    }
+
+    /**
+     * Start the foreground service. Must be called AFTER Bluetooth permissions are granted.
+     * Android 14+ requires BLUETOOTH_CONNECT before startForeground() with connectedDevice type.
+     */
+    fun ensureServiceStarted() {
+        if (serviceStarted) return
+        serviceStarted = true
+        bindService()
     }
 
     override fun onCleared() {

@@ -285,7 +285,19 @@ class GatewayTunnel(
         } catch (e: CancellationException) {
             Log.i(TAG, "✋ Request $id cancelled: $method $path")
         } catch (e: Exception) {
-            Log.e(TAG, "Request $id failed: ${e.message}")
+            Log.e(TAG, "Request $id failed: ${e.message}", e)
+            // MUST send an error response — otherwise the server waits forever → 504 timeout
+            try {
+                val resp = JsonObject().apply {
+                    addProperty("type", "response")
+                    addProperty("id", id)
+                    addProperty("status", 500)
+                    add("body", errorJson(e.message ?: "Internal error"))
+                }
+                ws.send(resp.toString())
+            } catch (sendErr: Exception) {
+                Log.e(TAG, "Failed to send error response for $id: ${sendErr.message}")
+            }
         }
     }
 

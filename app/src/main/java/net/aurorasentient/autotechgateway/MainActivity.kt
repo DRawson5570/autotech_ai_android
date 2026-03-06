@@ -37,6 +37,8 @@ class MainActivity : ComponentActivity() {
         if (!allGranted) {
             Toast.makeText(this, "Bluetooth permissions required for OBD connection", Toast.LENGTH_LONG).show()
         }
+        // Start foreground service now that permissions are resolved
+        viewModel.ensureServiceStarted()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,6 +79,9 @@ class MainActivity : ComponentActivity() {
 
         if (needed.isNotEmpty()) {
             permissionLauncher.launch(needed.toTypedArray())
+        } else {
+            // All permissions already granted, start service immediately
+            viewModel.ensureServiceStarted()
         }
     }
 }

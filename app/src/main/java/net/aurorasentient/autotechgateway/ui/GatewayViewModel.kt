@@ -71,6 +71,10 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
     private val _showUnsupportedAdapterDialog = MutableStateFlow(false)
     val showUnsupportedAdapterDialog: StateFlow<Boolean> = _showUnsupportedAdapterDialog
 
+    // Battery optimization nag — true when Doze exemption is NOT granted
+    private val _batteryOptimizationNeeded = MutableStateFlow(false)
+    val batteryOptimizationNeeded: StateFlow<Boolean> = _batteryOptimizationNeeded
+
     // Auto-updater
     private val autoUpdater = AutoUpdater(application)
     private val _updateInfo = MutableStateFlow<UpdateInfo?>(null)
@@ -213,8 +217,8 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
                 // Detect STN/OBDLink capabilities
                 detectAdapterCapabilities()
 
-                // Request battery optimization exemption for reliable BT keepalive
-                requestBatteryOptimizationExemption()
+                // Check battery optimization — UI will nag if not exempt
+                checkBatteryOptimization()
 
                 // Auto-start tunnel if configured
                 if (settings.value.autoTunnel && settings.value.shopId.isNotEmpty()) {
@@ -507,25 +511,37 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
     // ── Battery Optimization ──────────────────────────────────────
 
     /**
-     * Request exemption from Android battery optimization (Doze).
-     * Without this, the OS can suspend BT and delay AlarmManager alarms,
-     * causing the adapter connection to drop during idle periods.
-     * Only prompts once — Android remembers the exemption.
+     * Check if battery optimization exemption is needed and update state.
+     * Called on connect and when the user returns from system settings.
      */
-    private fun requestBatteryOptimizationExemption() {
+    fun checkBatteryOptimization() {
         try {
             val ctx = getApplication<Application>()
             val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
-            if (!pm.isIgnoringBatteryOptimizations(ctx.packageName)) {
-                Log.i(TAG, "Requesting battery optimization exemption")
-                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:${ctx.packageName}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                ctx.startActivity(intent)
+            val needed = !pm.isIgnoringBatteryOptimizations(ctx.packageName)
+            _batteryOptimizationNeeded.value = needed
+            if (!needed) {
+                Log.i(TAG, "Battery optimization exemption confirmed")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Could not request battery optimization exemption: ${e.message}")
+            Log.w(TAG, "Could not check battery optimization: ${e.message}")
+        }
+    }
+
+    /**
+     * Open the system battery optimization settings to exempt this app.
+     * Shows the direct per-app dialog (not the full battery settings page).
+     */
+    fun requestBatteryOptimizationExemption() {
+        try {
+            val ctx = getApplication<Application>()
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:${ctx.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not open battery optimization settings: ${e.message}")
         }
     }
 }

@@ -120,6 +120,19 @@ fun MainApp(viewModel: GatewayViewModel) {
     val updateInfo by viewModel.updateInfo.collectAsState()
     val updateProgress by viewModel.updateProgress.collectAsState()
     val showUnsupportedAdapter by viewModel.showUnsupportedAdapterDialog.collectAsState()
+    val batteryOptNeeded by viewModel.batteryOptimizationNeeded.collectAsState()
+
+    // Re-check battery optimization when app resumes (user may have just changed it)
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.checkBatteryOptimization()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // Unsupported adapter dialog
     if (showUnsupportedAdapter) {
@@ -201,7 +214,15 @@ fun MainApp(viewModel: GatewayViewModel) {
         },
         containerColor = DarkBackground
     ) { padding ->
-        Box(modifier = Modifier.padding(padding)) {
+        Column(modifier = Modifier.padding(padding)) {
+            // Battery optimization warning banner — persistent until fixed
+            if (batteryOptNeeded && status.state.ordinal >= GatewayState.CONNECTED.ordinal) {
+                BatteryOptimizationBanner(
+                    onFixNow = { viewModel.requestBatteryOptimizationExemption() }
+                )
+            }
+
+            Box(modifier = Modifier.weight(1f)) {
             when (currentScreen) {
                 Screen.DASHBOARD -> DashboardScreen(
                     status = status,
@@ -266,13 +287,13 @@ fun MainApp(viewModel: GatewayViewModel) {
         // Toast Snackbar
         if (toastMessage != null) {
             Snackbar(
-                modifier = Modifier.padding(padding),
                 containerColor = DarkSurfaceVariant,
                 contentColor = TextPrimary
             ) {
                 Text(toastMessage!!)
             }
         }
+        } // Column
     }
 }
 
@@ -355,4 +376,55 @@ fun UnsupportedAdapterDialog(
             }
         }
     )
+}
+
+// ── Battery Optimization Banner ─────────────────────────────────
+
+/**
+ * Persistent warning banner shown when battery optimization is enabled.
+ * Cannot be dismissed — only goes away when the user actually exempts the app.
+ */
+@Composable
+fun BatteryOptimizationBanner(onFixNow: () -> Unit) {
+    Surface(
+        color = StatusYellow.copy(alpha = 0.15f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                Icons.Default.BatteryAlert,
+                contentDescription = null,
+                tint = StatusYellow,
+                modifier = Modifier.size(24.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Battery optimization will disconnect your adapter",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                    lineHeight = 16.sp
+                )
+                Text(
+                    "Disable battery optimization for Autotech Gateway to maintain a stable Bluetooth connection.",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp
+                )
+            }
+            Button(
+                onClick = onFixNow,
+                colors = ButtonDefaults.buttonColors(containerColor = StatusYellow),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text("Fix Now", color = DarkBackground, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }

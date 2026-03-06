@@ -112,9 +112,31 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         // Start periodic update checks (doesn't need BT permissions)
+        // Auto-downloads and prompts install immediately when an update is found
         autoUpdater.startPeriodicChecks(viewModelScope) { info ->
             _updateInfo.value = info
-            _toastMessage.value = "Update available: v${info.latestVersion}"
+            _toastMessage.value = "Downloading update v${info.latestVersion}..."
+            autoDownloadAndInstall(info)
+        }
+    }
+
+    /**
+     * Automatically download and launch the install prompt.
+     * Called when a new version is detected (periodic check, startup, or remote trigger).
+     */
+    private fun autoDownloadAndInstall(info: net.aurorasentient.autotechgateway.update.UpdateInfo) {
+        if (info.downloadUrl.isEmpty()) return
+        viewModelScope.launch {
+            _updateProgress.value = 0f
+            val success = autoUpdater.downloadAndInstall(info.downloadUrl) { progress ->
+                _updateProgress.value = progress
+            }
+            if (success) {
+                _toastMessage.value = "Update v${info.latestVersion} ready — tap Install when prompted"
+            } else {
+                _toastMessage.value = "Update download failed"
+            }
+            _updateProgress.value = -1f
         }
     }
 
@@ -428,6 +450,9 @@ class GatewayViewModel(application: Application) : AndroidViewModel(application)
             _updateInfo.value = info
             if (!info.available) {
                 _toastMessage.value = "You're on the latest version (${info.currentVersion})"
+            } else {
+                _toastMessage.value = "Downloading update v${info.latestVersion}..."
+                autoDownloadAndInstall(info)
             }
         }
     }
